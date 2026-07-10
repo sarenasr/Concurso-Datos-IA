@@ -1,0 +1,40 @@
+{
+  "patterns": [
+    {
+      "name": "date_filter",
+      "user_question": "¿Cuántos contratos firmó Medellín en 2025?",
+      "soql": "$select=count(*) as n&$where=ciudad='Medellín' and fecha_de_firma_del_contrato >= '2025-01-01' and fecha_de_firma_del_contrato < '2026-01-01'",
+      "explanation": "Filtra por ciudad y por un rango de fechas sobre Fecha de Firma del Contrato."
+    },
+    {
+      "name": "geo_box",
+      "user_question": "Casos de COVID en Antioquia",
+      "soql": "$select=count(*) as casos&$where=departamento_nom='Antioquia'",
+      "explanation": "Filtra por departamento usando el nombre del departamento (geo nominal)."
+    },
+    {
+      "name": "group_aggregate",
+      "user_question": "Beneficiarios de Familias en Acción por municipio en Antioquia",
+      "soql": "$select=municipio, sum(beneficiarios) as total&$where=departamento='Antioquia'&$group=municipio&$order=total desc",
+      "explanation": "Agrega con GROUP BY municipio y SUM sobre la columna de beneficiarios, ordenado desc."
+    },
+    {
+      "name": "top_n",
+      "user_question": "Top 5 empresas con más contratos en Medellín en 2025",
+      "soql": "$select=nit_entidad, nombre_entidad, count(*) as n, sum(valor_del_contrato) as valor&$where=ciudad='Medellín' and fecha_de_firma_del_contrato >= '2025-01-01'&$group=nit_entidad, nombre_entidad&$order=n desc&$limit=5",
+      "explanation": "Agrupa por Nit Entidad + Nombre Entidad, cuenta y suma Valor del Contrato, top 5."
+    },
+    {
+      "name": "text_like_in",
+      "user_question": "Medicamentos cardiovasculares vigentes",
+      "soql": "$select=count(*) as n&$where=estado='Vigente' and lower(grupo) like '%cardiovasculares%'",
+      "explanation": "Filtra por Estado Vigente y busca el grupo terapéutico con LIKE insensible a mayúsculas."
+    },
+    {
+      "name": "cross_year_compare",
+      "user_question": "TRM promedio del último mes comparada con el año anterior",
+      "soql": "$select=date_trunc_ym(vigenciadesde) as mes, avg(valor) as promedio&$where=vigenciadesde >= '2024-01-01'&$group=mes&$order=mes desc&$limit=24",
+      "explanation": "Trunca vigenciadesde a mes, promedia valor y ordena para comparar años consecutivos."
+    }
+  ]
+}

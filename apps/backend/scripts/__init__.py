@@ -1,0 +1,1 @@
+"""DATIA CLI scripts package."""

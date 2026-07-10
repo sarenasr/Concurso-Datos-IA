@@ -1,0 +1,52 @@
+hero_questions:
+  - id: 1
+    question: "¿Cuántos contratos públicos firmó Medellín en 2025 y cuáles las top 5 empresas?"
+    datasets: ["jbjy-vk9h"]   # SECOP II Contratos
+    pattern: single_dataset_soql
+    answer_shape: number + top5_bar_chart
+  - id: 2
+    question: "¿Cuántos casos de COVID hubo en mi municipio en la última semana con datos?"
+    datasets: ["gt2j-8ykr"]
+    pattern: geo_time_soql
+    answer_shape: number
+  - id: 3
+    question: "¿Empresas sancionadas que además tienen contratos en salud en Antioquia?"
+    datasets: ["secop-sancionados-id-todo", "jbjy-vk9h"]   # cross-sector via NIT
+    pattern: graph_join
+    answer_shape: table
+    note: secop-sancionados id to be resolved by pull_schemas.py
+  - id: 4
+    question: "¿Cuál fue la TRM promedio del último mes comparada con el año anterior?"
+    datasets: ["mcec-87by"]
+    pattern: time_series_compare
+    answer_shape: number + line_chart
+  - id: 5
+    question: "¿Qué datos abiertos existen sobre vacunación?"
+    datasets: []
+    pattern: catalog_rag
+    answer_shape: ranked_dataset_list
+  - id: 6
+    question: "Verificá este tweet: 'El gobierno contrató más en 2025 que en 2024'."
+    datasets: ["jbjy-vk9h"]
+    pattern: claim_checker
+    answer_shape: verdict_verde_amarillo_rojo + citations
+  - id: 7
+    question: "¿Qué hay de Antioquia en datos?"
+    datasets: []
+    pattern: geo_dashboard
+    answer_shape: multi_dataset_summary
+  - id: 8
+    question: "Analizá el déficit de viviendas en Bogotá usando datos abiertos."
+    datasets: []
+    pattern: multi_dataset_story
+    answer_shape: markdown_story + charts
+  - id: 9
+    question: "¿Cuántos medicamentos vigentes hay registrados y cuántos son del grupo cardiovasculares?"
+    datasets: ["i7cb-raxc"]
+    pattern: filter_aggregate_soql
+    answer_shape: number
+  - id: 10
+    question: "¿Cuántos beneficiarios de Familias en Acción hay por municipio en Antioquia?"
+    datasets: ["xfif-myr2"]
+    pattern: geo_aggregate_soql
+    answer_shape: table + map

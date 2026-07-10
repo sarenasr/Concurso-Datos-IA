@@ -1,0 +1,3 @@
+# Schema registry. Filled by scripts/pull_schemas.py.
+# Each entry: {id, name, permalink, columns: [{name, field_name, datatype, description}]}
+datasets: []

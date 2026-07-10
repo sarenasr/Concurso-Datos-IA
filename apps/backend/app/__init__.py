@@ -1,0 +1,1 @@
+"""DATIA backend application package."""
