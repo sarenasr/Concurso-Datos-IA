@@ -1,6 +1,0 @@
-[deploy]
-start = "uv run uvicorn app.main:app --host 0.0.0.0 --port $PORT"
-workdir = "apps/backend"
-
-[env]
-# Frontend deploys separately on Vercel (this file only configures the backend service).

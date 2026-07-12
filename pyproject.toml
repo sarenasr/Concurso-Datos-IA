@@ -1,8 +1,0 @@
-[project]
-name = "datia"
-version = "0.1.0"
-requires-python = ">=3.11"
-description = "DATIA — AI assistant for Colombian open data"
-
-[tool.uv]
-package = false

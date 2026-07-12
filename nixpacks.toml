@@ -1,8 +1,0 @@
-[phases.setup]
-nixPkgs = ["python311", "uv"]
-
-[phase.install]
-cmds = ["cd apps/backend && uv sync"]
-
-[start]
-cmd = "cd apps/backend && uv run uvicorn app.main:app --host 0.0.0.0 --port $PORT"
