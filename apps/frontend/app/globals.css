@@ -145,15 +145,19 @@ body {
 
 @keyframes datia-bubble-pulse {
   0%, 100% {
-    box-shadow: 0 0 0 0 rgba(250, 176, 18, 0.4);
+    box-shadow:
+      0 0 0 0 rgba(250, 176, 18, 0.55),
+      0 4px 16px rgba(0, 0, 0, 0.25);
   }
   50% {
-    box-shadow: 0 0 0 10px rgba(250, 176, 18, 0);
+    box-shadow:
+      0 0 0 14px rgba(250, 176, 18, 0),
+      0 4px 16px rgba(0, 0, 0, 0.25);
   }
 }
 
 .datia-bubble-pulse {
-  animation: datia-bubble-pulse 2.5s ease-in-out infinite;
+  animation: datia-bubble-pulse 2.2s ease-in-out infinite;
 }
 
 .datia-bubble-idle {

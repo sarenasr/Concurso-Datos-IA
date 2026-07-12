@@ -10,18 +10,11 @@ export function DatiaBubble() {
 
   useEffect(() => {
     if (!open) return;
-    function onDown(e: MouseEvent) {
-      if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
-        return;
-      }
-    }
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") setOpen(false);
     }
-    document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey);
     return () => {
-      document.removeEventListener("mousedown", onDown);
       document.removeEventListener("keydown", onKey);
     };
   }, [open]);
@@ -31,23 +24,37 @@ export function DatiaBubble() {
       {open && (
         <div
           ref={panelRef}
-          className="datia-panel-enter absolute bottom-16 right-0 flex w-[380px] flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl shadow-black/20 sm:w-[400px]"
-          style={{ height: 500 }}
+          className="datia-panel-enter absolute bottom-20 right-0 flex w-[380px] flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl shadow-black/25 sm:w-[420px]"
+          style={
+            {
+              height: 520,
+              "--background": "#ffffff",
+              "--foreground": "#0a0a0a",
+              "--card": "#ffffff",
+              "--card-foreground": "#0a0a0a",
+              "--muted": "#f5f5f5",
+              "--muted-foreground": "#6b6b6b",
+              "--border": "#e5e5e5",
+              "--input": "#e5e5e5",
+            } as React.CSSProperties
+          }
         >
-          <div className="flex shrink-0 items-center gap-3 border-b border-border bg-colombia-blue px-4 py-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-colombia-yellow shadow-sm">
-              <Database className="h-4 w-4 text-accent-foreground" strokeWidth={2.25} />
+          <div className="flex shrink-0 items-center gap-3 border-b border-yellow-300/50 bg-colombia-yellow px-4 py-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-white/90 shadow-sm">
+              <Database className="h-4 w-4 text-colombia-blue" strokeWidth={2.25} />
             </div>
             <div className="flex flex-1 flex-col">
-              <span className="text-sm font-bold text-white leading-tight">DATIA</span>
-              <span className="text-[10px] text-white/70 leading-tight font-medium">
+              <span className="text-sm font-bold text-gray-900 leading-tight">
+                DATIA
+              </span>
+              <span className="text-[10px] text-gray-700 leading-tight font-medium">
                 Habla con los datos
               </span>
             </div>
             <button
               type="button"
               onClick={() => setOpen(false)}
-              className="flex h-8 w-8 items-center justify-center rounded-lg text-white/70 transition-colors hover:bg-white/10 hover:text-white"
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-600 transition-colors hover:bg-white/50 hover:text-gray-900"
               aria-label="Cerrar chat"
             >
               <X className="h-4 w-4" />
@@ -60,15 +67,17 @@ export function DatiaBubble() {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className={`datia-bubble-pulse flex h-14 w-14 items-center justify-center rounded-full bg-colombia-yellow text-accent-foreground shadow-lg shadow-colombia-yellow/30 transition-all duration-200 hover:scale-105 hover:shadow-xl hover:shadow-colombia-yellow/40 active:scale-95 ${
-          open ? "datia-bubble-idle" : ""
+        className={`datia-bubble-pulse flex h-16 w-16 items-center justify-center rounded-full border-4 border-white transition-all duration-200 hover:scale-105 active:scale-95 ${
+          open
+            ? "datia-bubble-idle bg-white shadow-lg shadow-black/20 text-colombia-blue"
+            : "bg-colombia-yellow text-gray-900"
         }`}
         aria-label={open ? "Cerrar chat DATIA" : "Abrir chat DATIA"}
       >
         {open ? (
-          <X className="h-6 w-6" strokeWidth={2.25} />
+          <X className="h-7 w-7" strokeWidth={2.5} />
         ) : (
-          <MessageCircle className="h-6 w-6" strokeWidth={2.25} />
+          <MessageCircle className="h-7 w-7" strokeWidth={2.25} />
         )}
       </button>
     </div>

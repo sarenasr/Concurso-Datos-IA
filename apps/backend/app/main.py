@@ -27,18 +27,6 @@ app.add_middleware(
 )
 
 
-@app.on_event("startup")
-async def _warmup_embedding_model() -> None:
-    """Pre-load the sentence-transformers model so the first request is fast."""
-    import asyncio
-
-    from app.rag.embeddings import embed_text
-
-    log.info("Warming up embedding model...")
-    await asyncio.to_thread(embed_text, "warmup")
-    log.info("Embedding model ready.")
-
-
 # --- Request models ---------------------------------------------------------
 
 
