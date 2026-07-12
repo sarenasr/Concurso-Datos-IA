@@ -101,7 +101,7 @@ SOQL_SYSTEM_PROMPT = (
     "Reglas importantes:\n"
     "- Usa field_name (snake_case) no el name de columna\n"
     "- Fechas en formato ISO: '2025-01-01T00:00:00.000'\n"
-    "- Texto es case-sensitive: usa like 'MAYÚSCULAS' o in ('valor1','valor2')\n"
+    "- Texto es case-sensitive: los valores usan Title Case (ej: 'Medellín', 'Bogotá', 'Antioquia')\n"
     "- $limit por defecto 1000, máximo 50000\n"
     "- Agregaciones: $select=campo, count(*)&$group=campo\n"
     "- Top N: $order=campo DESC&$limit=N"

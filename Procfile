@@ -1,0 +1,1 @@
+web: cd apps/backend && uv sync && uv run uvicorn app.main:app --host 0.0.0.0 --port $PORT

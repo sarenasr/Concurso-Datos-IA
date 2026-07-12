@@ -3,8 +3,8 @@
     {
       "name": "date_filter",
       "user_question": "¿Cuántos contratos firmó Medellín en 2025?",
-      "soql": "$select=count(*) as n&$where=ciudad='MEDELLÍN' and fecha_de_firma >= '2025-01-01' and fecha_de_firma < '2026-01-01'",
-      "explanation": "Filtra por ciudad (ciudad) y por rango de fechas sobre Fecha de Firma (fecha_de_firma). Usa MAYÚSCULAS para texto."
+      "soql": "$select=count(*) as n&$where=ciudad='Medellín' and fecha_de_firma >= '2025-01-01' and fecha_de_firma < '2026-01-01'",
+      "explanation": "Filtra por ciudad (ciudad) y por rango de fechas sobre Fecha de Firma (fecha_de_firma). Los valores de texto usan Title Case (ej: 'Medellín', 'Bogotá')."
     },
     {
       "name": "geo_box",
@@ -21,7 +21,7 @@
     {
       "name": "top_n",
       "user_question": "Top 5 empresas con más contratos en Medellín en 2025",
-      "soql": "$select=proveedor_adjudicado, documento_proveedor, count(*) as n, sum(valor_del_contrato) as valor&$where=ciudad='MEDELLÍN' and fecha_de_firma >= '2025-01-01'&$group=proveedor_adjudicado, documento_proveedor&$order=n desc&$limit=5",
+      "soql": "$select=proveedor_adjudicado, documento_proveedor, count(*) as n, sum(valor_del_contrato) as valor&$where=ciudad='Medellín' and fecha_de_firma >= '2025-01-01'&$group=proveedor_adjudicado, documento_proveedor&$order=n desc&$limit=5",
       "explanation": "Agrupa por proveedor_adjudicado + documento_proveedor, cuenta y suma valor_del_contrato, top 5."
     },
     {
