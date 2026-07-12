@@ -3,8 +3,8 @@
     {
       "name": "date_filter",
       "user_question": "¿Cuántos contratos firmó Medellín en 2025?",
-      "soql": "$select=count(*) as n&$where=ciudad='Medellín' and fecha_de_firma_del_contrato >= '2025-01-01' and fecha_de_firma_del_contrato < '2026-01-01'",
-      "explanation": "Filtra por ciudad y por un rango de fechas sobre Fecha de Firma del Contrato."
+      "soql": "$select=count(*) as n&$where=ciudad='MEDELLÍN' and fecha_de_firma >= '2025-01-01' and fecha_de_firma < '2026-01-01'",
+      "explanation": "Filtra por ciudad (ciudad) y por rango de fechas sobre Fecha de Firma (fecha_de_firma). Usa MAYÚSCULAS para texto."
     },
     {
       "name": "geo_box",
@@ -15,20 +15,20 @@
     {
       "name": "group_aggregate",
       "user_question": "Beneficiarios de Familias en Acción por municipio en Antioquia",
-      "soql": "$select=municipio, sum(beneficiarios) as total&$where=departamento='Antioquia'&$group=municipio&$order=total desc",
-      "explanation": "Agrega con GROUP BY municipio y SUM sobre la columna de beneficiarios, ordenado desc."
+      "soql": "$select=nombremunicipioatencion, sum(cantidaddebeneficiarios) as total&$where=codigodepartamentoatencion='05'&$group=nombremunicipioatencion&$order=total desc",
+      "explanation": "Agrega con GROUP BY municipio y SUM sobre cantidaddebeneficiarios. Filtra por código de departamento Antioquia=05."
     },
     {
       "name": "top_n",
       "user_question": "Top 5 empresas con más contratos en Medellín en 2025",
-      "soql": "$select=nit_entidad, nombre_entidad, count(*) as n, sum(valor_del_contrato) as valor&$where=ciudad='Medellín' and fecha_de_firma_del_contrato >= '2025-01-01'&$group=nit_entidad, nombre_entidad&$order=n desc&$limit=5",
-      "explanation": "Agrupa por Nit Entidad + Nombre Entidad, cuenta y suma Valor del Contrato, top 5."
+      "soql": "$select=proveedor_adjudicado, documento_proveedor, count(*) as n, sum(valor_del_contrato) as valor&$where=ciudad='MEDELLÍN' and fecha_de_firma >= '2025-01-01'&$group=proveedor_adjudicado, documento_proveedor&$order=n desc&$limit=5",
+      "explanation": "Agrupa por proveedor_adjudicado + documento_proveedor, cuenta y suma valor_del_contrato, top 5."
     },
     {
       "name": "text_like_in",
       "user_question": "Medicamentos cardiovasculares vigentes",
-      "soql": "$select=count(*) as n&$where=estado='Vigente' and lower(grupo) like '%cardiovasculares%'",
-      "explanation": "Filtra por Estado Vigente y busca el grupo terapéutico con LIKE insensible a mayúsculas."
+      "soql": "$select=count(*) as n&$where=estadocum='Vigente' and lower(descripcionatc) like '%cardiovascular%'",
+      "explanation": "Filtra por estadocum Vigente y busca en descripcionatc con LIKE insensible a mayúsculas."
     },
     {
       "name": "cross_year_compare",

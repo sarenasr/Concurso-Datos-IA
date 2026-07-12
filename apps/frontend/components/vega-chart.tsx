@@ -1,16 +1,102 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import vegaEmbed from "vega-embed";
+import { AlertCircle, Table2 } from "lucide-react";
 
 export function VegaChart({ spec }: { spec: Record<string, unknown> }) {
   const ref = useRef<HTMLDivElement>(null);
+  const [error, setError] = useState<string | null>(null);
+
   useEffect(() => {
     if (!ref.current) return;
-    const result = vegaEmbed(ref.current, spec, { actions: false });
+    setError(null);
+
+    const result = vegaEmbed(ref.current, spec as never, {
+      actions: false,
+      renderer: "svg",
+    });
+
+    result.catch((err: unknown) => {
+      const message =
+        err instanceof Error ? err.message : "Error al renderizar el gráfico";
+      setError(message);
+    });
+
     return () => {
       result.then((r) => r.finalize()).catch(() => {});
     };
   }, [spec]);
-  return <div ref={ref} className="mt-3 w-full overflow-x-auto" />;
+
+  // Extract data for table fallback
+  const dataValues = extractDataForTable(spec);
+
+  return (
+    <div className="mt-3 rounded-xl border border-border/60 bg-card p-4 shadow-sm">
+      {error ? (
+        /* Table fallback when chart fails */
+        <div className="space-y-3">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Table2 className="h-4 w-4" />
+            <span className="font-medium">Datos (vista de tabla)</span>
+          </div>
+          {dataValues.length > 0 ? (
+            <div className="overflow-x-auto rounded-lg border border-border/40">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-border/40 bg-muted/50">
+                    {Object.keys(dataValues[0] ?? {}).map((key) => (
+                      <th
+                        key={key}
+                        className="px-3 py-2 text-left font-semibold text-foreground"
+                      >
+                        {key}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {dataValues.slice(0, 50).map((row, i) => (
+                    <tr
+                      key={i}
+                      className="border-b border-border/20 last:border-0"
+                    >
+                      {Object.values(row).map((val, j) => (
+                        <td key={j} className="px-3 py-1.5 text-muted-foreground">
+                          {String(val ?? "")}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {dataValues.length > 50 && (
+                <p className="px-3 py-2 text-xs text-muted-foreground">
+                  Mostrando 50 de {dataValues.length} filas
+                </p>
+              )}
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 rounded-lg bg-destructive/10 border border-destructive/20 px-3 py-2.5 text-sm text-destructive">
+              <AlertCircle className="h-4 w-4 shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div ref={ref} className="w-full overflow-x-auto" />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Extracts data values from a Vega-Lite spec for table fallback.
+ */
+function extractDataForTable(spec: Record<string, unknown>): Record<string, unknown>[] {
+  const data = spec.data as Record<string, unknown> | undefined;
+  if (!data) return [];
+  const values = data.values as Record<string, unknown>[] | undefined;
+  if (Array.isArray(values)) return values;
+  return [];
 }

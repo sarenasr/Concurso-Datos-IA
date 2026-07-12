@@ -24,12 +24,20 @@ export async function streamChat(
   onEvent: (event: ChatEvent) => void,
   signal?: AbortSignal
 ): Promise<void> {
-  const res = await fetch(`${BACKEND_URL}/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ messages, stream: true }),
-    signal,
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${BACKEND_URL}/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages, stream: true }),
+      signal,
+    });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") throw err;
+    throw new TypeError(
+      "No se pudo conectar con el servidor. ¿Está el backend funcionando?"
+    );
+  }
 
   if (!res.ok || !res.body) {
     throw new Error(`Error del servidor: ${res.status}`);
