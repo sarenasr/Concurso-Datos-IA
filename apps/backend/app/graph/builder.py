@@ -28,6 +28,7 @@ Pipeline (`build_graph(dataset_ids)`):
 The graph is intentionally conservative: false-positive joins are more dangerous
 than missing edges, so join validation is a hard gate.
 """
+
 from __future__ import annotations
 
 import json
@@ -59,7 +60,7 @@ JOIN_JACCARD_THRESHOLD = 0.1
 def _supabase():
     from supabase import create_client
 
-    return create_client(settings.supabase_url, settings.supabase_service_key)
+    return create_client(settings.supabase_url, settings.supabase_key_resolved)
 
 
 def _llm_complete(system: str, user: str) -> str:
@@ -69,6 +70,10 @@ def _llm_complete(system: str, user: str) -> str:
     model = settings.litellm_model
     kwargs: dict[str, Any] = {}
     if settings.litellm_api_base:
+        # Custom OpenAI-compatible endpoint (e.g. OpenCode Go)
+        # LiteLLM requires the "openai/" provider prefix for custom endpoints
+        if not model.startswith("openai/"):
+            model = f"openai/{model}"
         kwargs["api_base"] = settings.litellm_api_base
     key = settings.litellm_api_key_resolved
     if key:
@@ -140,7 +145,16 @@ def _same_topic_pairs(sb, dataset_ids: list[str]) -> list[tuple[str, str, float]
     )
     cats = sb.table("catalog").select("id, domain_category").in_("id", dataset_ids).execute().data
     cat_of = {r["id"]: r.get("domain_category") for r in cats}
-    emb_of = {r["dataset_id"]: np.asarray(r["embedding"], dtype=float) for r in rows if r.get("embedding")}
+    import ast
+
+    emb_of = {}
+    for r in rows:
+        emb = r.get("embedding")
+        if emb is None:
+            continue
+        if isinstance(emb, str):
+            emb = ast.literal_eval(emb)
+        emb_of[r["dataset_id"]] = np.asarray(emb, dtype=float)
     pairs = []
     ids = [d for d in dataset_ids if d in emb_of]
     for i, a in enumerate(ids):
@@ -156,22 +170,49 @@ def _same_topic_pairs(sb, dataset_ids: list[str]) -> list[tuple[str, str, float]
     return pairs
 
 
+def _get_normalized_schema_from_registry(registry: list[dict], dataset_id: str) -> list[dict]:
+    """Get columns from the pre-built registry.yaml instead of the blocked Socrata API."""
+    for ds in registry:
+        if ds.get("id") == dataset_id:
+            out = []
+            for c in ds.get("columns", []):
+                raw = c.get("name") or c.get("field_name") or ""
+                field = c.get("field_name") or raw
+                out.append(
+                    {
+                        "raw_name": raw,
+                        "field_name": field,
+                        "normalized": normalize_column(raw),
+                        "datatype": c.get("datatype"),
+                    }
+                )
+            return out
+    return []
+
+
 def build_graph(dataset_ids: list[str]) -> dict:
     """Run the full graph-build pipeline for the given dataset ids.
 
     Returns a small report dict: counts of nodes/edges produced.
     """
+    import yaml
+    from pathlib import Path
+
     sb = _supabase()
     client = SocrataClient(settings.socrata_domain, settings.socrata_app_token)
+
+    # Load schema registry instead of hitting the blocked /api/views endpoint
+    registry_path = Path(__file__).resolve().parent.parent / "schemas" / "registry.yaml"
+    registry_data = yaml.safe_load(registry_path.read_text(encoding="utf-8")) or {}
+    registry = registry_data.get("datasets", [])
 
     # ---- Step 1+2: schemas + classification -------------------------------
     schemas: dict[str, list[dict]] = {}
     classified: dict[str, dict[str, str]] = {}
     for did in dataset_ids:
-        try:
-            schema = _get_normalized_schema(client, did)
-        except Exception as exc:  # noqa: BLE001
-            print(f"[build_graph] schema fetch failed for {did}: {exc}")
+        schema = _get_normalized_schema_from_registry(registry, did)
+        if not schema:
+            print(f"[build_graph] no schema for {did} in registry")
             continue
         schemas[did] = schema
         raw_names = [c["raw_name"] for c in schema]
@@ -226,7 +267,9 @@ def build_graph(dataset_ids: list[str]) -> dict:
 
     # ---- Step 3b: SAME_TOPIC edges ---------------------------------------
     for a, b, sim in _same_topic_pairs(sb, list(schemas.keys())):
-        validated_edges.append({"src": a, "dst": b, "type": "SAME_TOPIC", "confidence": sim, "extra": {}})
+        validated_edges.append(
+            {"src": a, "dst": b, "type": "SAME_TOPIC", "confidence": sim, "extra": {}}
+        )
 
     # ---- Step 3c: LOCATED_IN (dataset -> geo concept) --------------------
     located_edges: list[dict] = []
@@ -270,8 +313,16 @@ def build_graph(dataset_ids: list[str]) -> dict:
     if all_edges:
         # drop serial id; let DB assign
         sb.table("graph_edges").upsert(
-            [{"src": e["src"], "dst": e["dst"], "type": e["type"], "confidence": e["confidence"], "extra": e["extra"]}
-             for e in all_edges]
+            [
+                {
+                    "src": e["src"],
+                    "dst": e["dst"],
+                    "type": e["type"],
+                    "confidence": e["confidence"],
+                    "extra": e["extra"],
+                }
+                for e in all_edges
+            ]
         ).execute()
 
     return {

@@ -4,6 +4,7 @@
 `search_catalog` does dense retrieval (cosine) with a popularity prior and
 metadata filters. A TODO marks where BM25 + Reciprocal Rank Fusion will go.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -16,7 +17,7 @@ from app.socrata.client import SocrataClient
 def _supabase():
     from supabase import create_client
 
-    return create_client(settings.supabase_url, settings.supabase_service_key)
+    return create_client(settings.supabase_url, settings.supabase_key_resolved)
 
 
 def _flatten(item: dict) -> dict[str, Any]:
@@ -52,6 +53,7 @@ def ingest_catalog(limit: int | None = None) -> int:
     """Iterate the Socrata catalog and upsert rows into Supabase `catalog`.
 
     Returns the number of rows upserted. Uses the `on conflict id` strategy.
+    Deduplicates within each batch to avoid the "a second time" Postgres error.
     """
     sb = _supabase()
     client = SocrataClient(settings.socrata_domain, settings.socrata_app_token)
@@ -63,12 +65,25 @@ def ingest_catalog(limit: int | None = None) -> int:
             continue
         batch.append(row)
         n += 1
+        if n % 1000 == 0:
+            print(f"  ... fetched {n} rows from catalog", flush=True)
         if len(batch) >= 200:
-            sb.table("catalog").upsert(batch, on_conflict="id").execute()
+            _upsert_batch(sb, batch)
             batch = []
     if batch:
-        sb.table("catalog").upsert(batch, on_conflict="id").execute()
+        _upsert_batch(sb, batch)
+    print(f"  ... total fetched: {n}", flush=True)
     return n
+
+
+def _upsert_batch(sb, batch: list[dict]) -> None:
+    """Upsert a batch, deduplicating by id to avoid Postgres constraint error."""
+    seen: dict[str, dict] = {}
+    for row in batch:
+        seen[row["id"]] = row
+    deduped = list(seen.values())
+    if deduped:
+        sb.table("catalog").upsert(deduped, on_conflict="id").execute()
 
 
 def search_catalog(
@@ -98,8 +113,8 @@ def search_catalog(
         }
         if sector:
             params["sector"] = sector
-        if municipio:
-            params["municipio"] = municipio
+        # NOTE: municipio filter is not yet supported by the match_catalog RPC;
+        # it is intentionally omitted here to avoid an unknown-parameter error.
         rows = sb.rpc("match_catalog", params).execute().data
     except Exception:
         rows = _fallback_cosine_search(sb, qvec, k * 4, sector, municipio)
@@ -120,40 +135,76 @@ def _apply_popularity_prior(rows: list[dict]) -> list[dict]:
     return rows
 
 
+def _parse_embedding(emb: Any) -> list[float] | None:
+    """Parse an embedding value from Supabase into a list[float].
+
+    Embeddings are stored as Python-list *strings* (e.g. ``"[-0.01, ...]"``) rather
+    than native vectors, so ``np.asarray(emb, dtype=float)`` raises ``ValueError``.
+    We detect strings and ``ast.literal_eval`` them first.
+    """
+    import ast
+
+    if emb is None:
+        return None
+    if isinstance(emb, str):
+        try:
+            emb = ast.literal_eval(emb)
+        except (ValueError, SyntaxError):
+            return None
+    try:
+        return [float(x) for x in emb]
+    except (TypeError, ValueError):
+        return None
+
+
 def _fallback_cosine_search(
     sb, qvec: list[float], k: int, sector: str | None, municipio: str | None
 ) -> list[dict]:
     """Naive fallback: pull embeddings table + catalog, compute cosine in numpy."""
     import numpy as np
 
-    emb_rows = sb.table("catalog_embeddings").select("dataset_id, embedding, doc_text").execute().data
-    cat_rows = sb.table("catalog").select(
-        "id, name, description, domain_category, permalink, page_views_last_month"
-    ).execute().data
+    emb_rows = (
+        sb.table("catalog_embeddings").select("dataset_id, embedding, doc_text").execute().data
+    )
+    cat_rows = (
+        sb.table("catalog")
+        .select("id, name, description, domain_category, permalink, page_views_last_month")
+        .execute()
+        .data
+    )
     cat_by_id = {r["id"]: r for r in cat_rows}
 
     q = np.asarray(qvec, dtype=float)
     qn = q / (np.linalg.norm(q) + 1e-9)
     scored = []
     for er in emb_rows:
-        emb = er.get("embedding")
-        if emb is None:
+        parsed = _parse_embedding(er.get("embedding"))
+        if not parsed:
             continue
-        v = np.asarray(emb, dtype=float)
+        v = np.asarray(parsed, dtype=float)
+        if v.shape != q.shape:
+            continue
         vn = v / (np.linalg.norm(v) + 1e-9)
         sim = float(qn @ vn)
         cat = cat_by_id.get(er["dataset_id"], {})
-        if sector and cat.get("domain_category") != sector:
-            continue
         scored.append(
             {
                 "id": er["dataset_id"],
                 "name": cat.get("name"),
                 "description": cat.get("description"),
+                "domain_category": cat.get("domain_category"),
                 "score": sim,
                 "permalink": cat.get("permalink"),
                 "page_views_last_month": cat.get("page_views_last_month"),
             }
         )
     scored.sort(key=lambda r: r["score"], reverse=True)
+    # Prefer sector matches but never return an empty list: top up with the best
+    # unfiltered candidates so the agent always has something to try.
+    if sector:
+        sector_matches = [r for r in scored if r.get("domain_category") == sector]
+        if sector_matches:
+            ids = {r["id"] for r in sector_matches}
+            sector_matches += [r for r in scored if r["id"] not in ids]
+            return sector_matches[:k]
     return scored[:k]

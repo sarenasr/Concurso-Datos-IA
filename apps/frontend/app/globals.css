@@ -7,20 +7,24 @@
   --card-foreground: #0a0a0a;
   --popover: #ffffff;
   --popover-foreground: #0a0a0a;
-  --primary: #0a0a0a;
-  --primary-foreground: #fafafa;
+  --primary: #003893;
+  --primary-foreground: #ffffff;
   --secondary: #f5f5f5;
   --secondary-foreground: #171717;
   --muted: #f5f5f5;
   --muted-foreground: #6b6b6b;
-  --accent: #fab012;          /* GovCo yellow */
+  --accent: #fab012;
   --accent-foreground: #0a0a0a;
   --destructive: #e11d48;
   --destructive-foreground: #ffffff;
   --border: #e5e5e5;
   --input: #e5e5e5;
-  --ring: #fab012;            /* GovCo yellow */
+  --ring: #fab012;
   --radius: 0.75rem;
+
+  --colombia-blue: #003893;
+  --colombia-red: #ce1126;
+  --colombia-yellow: #fab012;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -31,7 +35,7 @@
     --card-foreground: #fafafa;
     --popover: #111111;
     --popover-foreground: #fafafa;
-    --primary: #fafafa;
+    --primary: #fab012;
     --primary-foreground: #0a0a0a;
     --secondary: #1f1f1f;
     --secondary-foreground: #fafafa;
@@ -44,6 +48,10 @@
     --border: #262626;
     --input: #262626;
     --ring: #fab012;
+
+    --colombia-blue: #3b6fd4;
+    --colombia-red: #e84357;
+    --colombia-yellow: #fab012;
   }
 }
 
@@ -67,6 +75,9 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-colombia-blue: var(--colombia-blue);
+  --color-colombia-red: var(--colombia-red);
+  --color-colombia-yellow: var(--colombia-yellow);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -76,5 +87,22 @@
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+}
+
+@keyframes thinking-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+.thinking-dot {
+  animation: thinking-pulse 1.4s ease-in-out infinite;
+}
+
+.thinking-dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.thinking-dot:nth-child(3) {
+  animation-delay: 0.4s;
 }

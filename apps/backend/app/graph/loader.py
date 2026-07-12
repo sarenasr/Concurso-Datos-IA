@@ -16,7 +16,7 @@ _GRAPH: nx.Graph | None = None
 def _supabase():
     from supabase import create_client
 
-    return create_client(settings.supabase_url, settings.supabase_service_key)
+    return create_client(settings.supabase_url, settings.supabase_key_resolved)
 
 
 def load_graph() -> nx.Graph:

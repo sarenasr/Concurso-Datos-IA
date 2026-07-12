@@ -1,4 +1,5 @@
 """Few-shot SoQL patterns loaded from `app/few_shots/patterns.json`."""
+
 from __future__ import annotations
 
 import json

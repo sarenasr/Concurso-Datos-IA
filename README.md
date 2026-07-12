@@ -40,9 +40,9 @@ Built for the **Concurso Datos al Ecosistema 2026** hackathon.
   Vercel AI SDK. Streams answers, shows `SourcesCard`, "Ver consulta" button.
 - **Storage** (`infra/supabase`): Supabase with pgvector. SQL migrations under
   `infra/supabase/migrations`.
-- **Embeddings**: Gemini `text-embedding-004` (768-dim) via `google-genai`.
+- **Embeddings**: `paraphrase-multilingual-mpnet-base-v2` (768-dim) via sentence-transformers (local, no API key). Gemini `gemini-embedding-001` supported as alternative via config.
+- **LLM**: provider-agnostic via LiteLLM. Defaults to OpenCode Go (`glm-5.2`) or any OpenAI-compatible endpoint.
 - **Deploy**: backend on Railway (`infra/railway.toml`), frontend on Vercel.
-- **Accent color**: GovCo yellow `#FAB012`.
 
 ## Setup
 
@@ -58,7 +58,7 @@ cp .env.example .env          # fill every variable
 cd apps/backend
 uv sync
 uv run python -m scripts.ingest_catalog          # load Socrata catalog into Supabase
-uv run python -m scripts.build_embeddings        # embed catalog rows (Gemini)
+uv run python -m scripts.build_embeddings        # embed catalog rows (local sentence-transformers, ~1.1GB download on first run)
 uv run python -m scripts.pull_schemas             # fetch schemas for priority datasets
 uv run python -m scripts.build_graph              # build the dataset graph
 uv run uvicorn app.main:app --reload --port 8000  # start API
@@ -84,6 +84,6 @@ pnpm dev
 
 ## Roadmap
 
-- **Phase 1 (hackathon)**: catalog RAG + SoQL agent + self-correction + citations + Vega-Lite.
-- **Phase 2**: graph joins across sectors (NIT, municipio), claim-checker verdicts.
-- **Phase 3**: proactive dashboards, multi-turn memory, more channels.
+- **Phase 1 (hackathon)**: catalog RAG + SoQL agent + self-correction + citations + Vega-Lite + MCP server.
+- **Phase 2**: graph joins across sectors (NIT, municipio), claim-checker verdicts, auto-graph construction on full 10k catalog.
+- **Phase 3**: proactive dashboards, multi-turn memory, WhatsApp/voice channels, indigenous-language support.

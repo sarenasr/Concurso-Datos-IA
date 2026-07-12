@@ -1,16 +1,28 @@
 import { Chat } from "@/components/chat";
+import { BarChart3 } from "lucide-react";
 
 export default function Home() {
   return (
-    <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-4 px-4 py-8">
-      <header className="flex items-center gap-3">
-        <span className="inline-block h-4 w-4 rounded-full bg-accent" aria-hidden />
-        <h1 className="text-xl font-semibold tracking-tight">DATIA</h1>
-        <span className="text-sm text-muted-foreground">
-          Habla con los datos de Colombia
-        </span>
+    <div className="flex h-screen flex-col overflow-hidden">
+      <header className="flex shrink-0 items-center gap-3 border-b bg-background px-4 py-3 md:px-6">
+        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-accent shadow-sm">
+          <BarChart3 className="h-5 w-5 text-accent-foreground" />
+        </div>
+        <div className="flex flex-col">
+          <h1 className="text-lg font-bold tracking-tight leading-tight">
+            DATIA
+          </h1>
+          <p className="text-xs text-muted-foreground leading-tight">
+            Habla con los datos de Colombia
+          </p>
+        </div>
+        <div className="ml-auto hidden items-center gap-1.5 sm:flex">
+          <span className="h-2.5 w-2.5 rounded-full bg-colombia-yellow" />
+          <span className="h-2.5 w-2.5 rounded-full bg-colombia-blue" />
+          <span className="h-2.5 w-2.5 rounded-full bg-colombia-red" />
+        </div>
       </header>
       <Chat />
-    </main>
+    </div>
   );
 }

@@ -1,128 +1,125 @@
 priority_datasets:
-  # --- Confirmed dataset IDs (verified on datos.gov.co) ---
-  - id: "gt2j-8ykr"
-    name: "Casos positivos de COVID-19 en Colombia"
-    search_hint: "covid casos positivos colombia"
-    sector: "Salud y Protección Social"
-  - id: "jbjy-vk9h"
-    name: "SECOP II - Contratos"
-    search_hint: "secop2 contratos"
-    sector: "Contratación pública"
-  - id: "p6dx-8zbt"
-    name: "SECOP II - Procesos"
-    search_hint: "secop2 procesos"
-    sector: "Contratación pública"
-  - id: "mcec-87by"
-    name: "TRM Tasa Representativa del Mercado"
-    search_hint: "trm tasa representativa mercado diario"
-    sector: "Economía y Finanzas"
-  - id: "i7cb-raxc"
-    name: "CUM Medicamentos Vigentes"
-    search_hint: "cum medicamentos vigentes registro invima"
-    sector: "Salud y Protección Social"
-  - id: "xfif-myr2"
-    name: "Familias en Acción - Beneficiarios"
-    search_hint: "familias en accion beneficiarios municipio"
-    sector: "Inclusión Social"
-
-  # --- Placeholders to be resolved by pull_schemas/ingest via catalog search ---
-  - id: TODO
-    name: "SECOP - Sancionados"
-    search_hint: "secop sancionados empresas"
-    sector: "Contratación pública"
-  - id: TODO
-    name: "SISBEN"
-    search_hint: "sisben base de datos potencial beneficiario"
-    sector: "Inclusión Social"
-  - id: TODO
-    name: "ICFES Resultados Saber 11"
-    search_hint: "icfes saber 11 resultados"
-    sector: "Educación"
-  - id: TODO
-    name: "RUNT - Registro Único Nacional de Tránsito"
-    search_hint: "runt registro vehiculos"
-    sector: "Transporte"
-  - id: TODO
-    name: "Registro Único de Víctimas"
-    search_hint: "registro unico de victimas"
-    sector: "Inclusión Social"
-  - id: TODO
-    name: "Población DANE por municipio"
-    search_hint: "dane poblacion municipio proyeccion"
-    sector: "Población"
-  - id: TODO
-    name: "División territorial DANE"
-    search_hint: "dane division territorial codigo dane municipio"
-    sector: "Población"
-  - id: TODO
-    name: "Contratos Bolsa A"
-    search_hint: "bolsa a contratos colombia compras eficientes"
-    sector: "Contratación pública"
-  - id: TODO
-    name: "Establecimientos de Salud (REPS)"
-    search_hint: "reps registro especial prestadores salud"
-    sector: "Salud y Protección Social"
-  - id: TODO
-    name: "Vacunación COVID"
-    search_hint: "vacunacion covid dosis aplicadas"
-    sector: "Salud y Protección Social"
-  - id: TODO
-    name: "Precios de Medicamentos"
-    search_hint: "precios medicamentos referencia invima"
-    sector: "Salud y Protección Social"
-  - id: TODO
-    name: "IPUH - Homicidios"
-    search_hint: "ipuh indice ponderal homicidios"
-    sector: "Seguridad y Defensa"
-  - id: TODO
-    name: "Mi Primer Empleo"
-    search_hint: "mi primer empleo programa"
-    sector: "Trabajo"
-  - id: TODO
-    name: "Matrícula educativa"
-    search_hint: "matricula educativa estudiantes"
-    sector: "Educación"
-  - id: TODO
-    name: "Cobertura educativa"
-    search_hint: "cobertura educativa neta bruta"
-    sector: "Educación"
-  - id: TODO
-    name: "Emisiones GEI (Hoja de Ruta clima)"
-    search_hint: "emisiones gases efecto invernadero hoja de ruta"
-    sector: "Ambiente"
-  - id: TODO
-    name: "Estaciones IDEAM"
-    search_hint: "estaciones ideam meteorologicas"
-    sector: "Ambiente"
-  - id: TODO
-    name: "Áreas protegidas"
-    search_hint: "areas protegidas sicap runap"
-    sector: "Ambiente"
-  - id: TODO
-    name: "Presupuesto General de la Nación"
-    search_hint: "presupuesto general nacion pgn ejecucion"
-    sector: "Economía y Finanzas"
-  - id: TODO
-    name: "Recaudo tributario DIAN"
-    search_hint: "recaudo tributario dian impuestos"
-    sector: "Economía y Finanzas"
-  - id: TODO
-    name: "Importaciones DIAN"
-    search_hint: "importaciones dian aduanas"
-    sector: "Economía y Finanzas"
-  - id: TODO
-    name: "Exportaciones DIAN"
-    search_hint: "exportaciones dian aduanas"
-    sector: "Economía y Finanzas"
-  - id: TODO
-    name: "Precios de servicios públicos"
-    search_hint: "precios servicios publicos energia gas agua"
-    sector: "Economía y Finanzas"
-  - id: TODO
-    name: "Tasa de desempleo DANE"
-    search_hint: "dane tasa desempleo mensual"
-    sector: "Trabajo"
-  - id: TODO
-    name: "PIB departamental"
-    search_hint: "pib departamental dane cuentas nacionales"
-    sector: "Economía y Finanzas"
+- id: gt2j-8ykr
+  name: Casos positivos de COVID-19 en Colombia
+  search_hint: covid casos positivos colombia
+  sector: Salud y Protección Social
+- id: jbjy-vk9h
+  name: SECOP II - Contratos
+  search_hint: secop2 contratos
+  sector: Contratación pública
+- id: p6dx-8zbt
+  name: SECOP II - Procesos
+  search_hint: secop2 procesos
+  sector: Contratación pública
+- id: mcec-87by
+  name: TRM Tasa Representativa del Mercado
+  search_hint: trm tasa representativa mercado diario
+  sector: Economía y Finanzas
+- id: i7cb-raxc
+  name: CUM Medicamentos Vigentes
+  search_hint: cum medicamentos vigentes registro invima
+  sector: Salud y Protección Social
+- id: xfif-myr2
+  name: Familias en Acción - Beneficiarios
+  search_hint: familias en accion beneficiarios municipio
+  sector: Inclusión Social
+- id: TODO
+  name: SECOP - Sancionados
+  search_hint: secop sancionados empresas
+  sector: Contratación pública
+- id: tq4m-hmg2
+  name: SISBEN
+  search_hint: sisben base de datos potencial beneficiario
+  sector: Inclusión Social
+- id: rnvb-vnyh
+  name: ICFES Resultados Saber 11
+  search_hint: icfes saber 11 resultados
+  sector: Educación
+- id: 6jmc-vaxk
+  name: RUNT - Registro Único Nacional de Tránsito
+  search_hint: runt registro vehiculos
+  sector: Transporte
+- id: y6ru-nqsj
+  name: Registro Único de Víctimas
+  search_hint: registro unico de victimas
+  sector: Inclusión Social
+- id: epzt-64uw
+  name: Población DANE por municipio
+  search_hint: dane poblacion municipio proyeccion
+  sector: Población
+- id: emp6-672w
+  name: División territorial DANE
+  search_hint: dane division territorial codigo dane municipio
+  sector: Población
+- id: rpmr-utcd
+  name: Contratos Bolsa A
+  search_hint: bolsa a contratos colombia compras eficientes
+  sector: Contratación pública
+- id: c36g-9fc2
+  name: Establecimientos de Salud (REPS)
+  search_hint: reps registro especial prestadores salud
+  sector: Salud y Protección Social
+- id: uw8e-gzpp
+  name: Vacunación COVID
+  search_hint: vacunacion covid dosis aplicadas
+  sector: Salud y Protección Social
+- id: spzp-dfuc
+  name: Precios de Medicamentos
+  search_hint: precios medicamentos referencia invima
+  sector: Salud y Protección Social
+- id: w25n-y3wf
+  name: IPUH - Homicidios
+  search_hint: ipuh indice ponderal homicidios
+  sector: Seguridad y Defensa
+- id: bis6-3he6
+  name: Mi Primer Empleo
+  search_hint: mi primer empleo programa
+  sector: Trabajo
+- id: dhqg-4ngc
+  name: Matrícula educativa
+  search_hint: matricula educativa estudiantes
+  sector: Educación
+- id: c4qb-ek68
+  name: Cobertura educativa
+  search_hint: cobertura educativa neta bruta
+  sector: Educación
+- id: ttr3-i6yj
+  name: Emisiones GEI (Hoja de Ruta clima)
+  search_hint: emisiones gases efecto invernadero hoja de ruta
+  sector: Ambiente
+- id: 57sv-p2fu
+  name: Estaciones IDEAM
+  search_hint: estaciones ideam meteorologicas
+  sector: Ambiente
+- id: h3v3-fnip
+  name: Áreas protegidas
+  search_hint: areas protegidas sicap runap
+  sector: Ambiente
+- id: actn-47cb
+  name: Presupuesto General de la Nación
+  search_hint: presupuesto general nacion pgn ejecucion
+  sector: Economía y Finanzas
+- id: 8tdc-u2ga
+  name: Recaudo tributario DIAN
+  search_hint: recaudo tributario dian impuestos
+  sector: Economía y Finanzas
+- id: 2eyg-yu5f
+  name: Importaciones DIAN
+  search_hint: importaciones dian aduanas
+  sector: Economía y Finanzas
+- id: y9ug-aa8r
+  name: Exportaciones DIAN
+  search_hint: exportaciones dian aduanas
+  sector: Economía y Finanzas
+- id: ek3f-5wn4
+  name: Precios de servicios públicos
+  search_hint: precios servicios publicos energia gas agua
+  sector: Economía y Finanzas
+- id: nudc-7mev
+  name: Tasa de desempleo DANE
+  search_hint: dane tasa desempleo mensual
+  sector: Trabajo
+- id: kgyi-qc7j
+  name: PIB departamental
+  search_hint: pib departamental dane cuentas nacionales
+  sector: Economía y Finanzas

@@ -1,11 +1,12 @@
-"""Telegram delivery channel.
+"""Telegram polling bot for DATIA.
 
-Webhook mode for Railway. Set TELEGRAM_BOT_TOKEN, deploy, then hit the running
-service once with `curl <app-url>/setwebhook` to register the webhook.
-
-Local polling mode for quick testing:
+Run locally:
     uv run python -m app.channels.telegram_bot
+
+On each text message the agent runs and the ``answer`` field is replied. Long
+answers are split into <=4096-char chunks to respect the Telegram limit.
 """
+
 from __future__ import annotations
 
 import logging
@@ -14,57 +15,57 @@ from app.config import settings
 
 log = logging.getLogger("datia.telegram")
 
+TELEGRAM_MAX_LEN = 4096
 
-def _application():
-    from telegram import Update
+
+def _split(text: str, limit: int = TELEGRAM_MAX_LEN) -> list[str]:
+    """Split ``text`` into chunks no longer than ``limit`` (line-aware)."""
+    chunks: list[str] = []
+    for line in text.splitlines(keepends=True):
+        if not chunks or len(chunks[-1]) + len(line) > limit:
+            chunks.append(line)
+        else:
+            chunks[-1] += line
+    return [c for c in chunks if c]
+
+
+async def _on_text(update, context) -> None:  # noqa: ANN001
+    """Handle an inbound text message: run the agent, reply with the answer."""
+    from app.agents.graph import run_agent
+
+    text = update.message.text
+    try:
+        result = run_agent(text)
+        reply = result.get("answer") or "Sin respuesta."
+    except Exception as exc:  # noqa: BLE001
+        log.exception("agent failed")
+        reply = f"Lo siento, hubo un error: {exc}"
+
+    for chunk in _split(reply):
+        await update.message.reply_text(chunk)
+
+
+def _build_app():
+    """Build a configured python-telegram-bot Application."""
     from telegram.ext import Application, CommandHandler, MessageHandler, filters
 
     app = Application.builder().token(settings.telegram_bot_token).build()
 
-    async def start(update: Update, context):
+    async def _start(update, context):  # noqa: ANN001
         await update.message.reply_text(
-            "Hola, soy DATIA. Preguntame sobre datos abiertos de Colombia 🇨🇴"
+            "Hola, soy DATIA. Preguntame sobre los datos abiertos de Colombia."
         )
 
-    async def on_text(update: Update, context):
-        from app.agents.graph import run_agent
-
-        text = update.message.text
-        try:
-            result = run_agent(text)
-            reply = result.get("answer") or "Sin respuesta."
-            await update.message.reply_text(reply[:4000])
-        except Exception as exc:  # noqa: BLE001
-            log.exception("agent failed")
-            await update.message.reply_text(f"Error: {exc}")
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
+    app.add_handler(CommandHandler("start", _start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _on_text))
     return app
 
 
-def run_polling() -> None:
-    """Run the bot in long-polling mode (local dev)."""
-    app = _application()
+def start_bot() -> None:
+    """Start the Telegram bot in long-polling mode."""
+    app = _build_app()
     app.run_polling()
 
 
-async def telegram_webhook(update_dict: dict) -> dict | None:
-    """Handle a single Telegram update dict (called by FastAPI webhook endpoint)."""
-    from telegram import Update
-
-    update = Update.de_json(update_dict, _application().bot)
-    await _application().process_update(update)
-    return {"ok": True}
-
-
-async def set_webhook(base_url: str) -> dict:
-    """Register the webhook URL with Telegram. Hit GET /setwebhook once deployed."""
-    app = _application()
-    url = f"{base_url.rstrip('/')}/telegram/webhook"
-    ok = await app.bot.set_webhook(url=url)
-    return {"webhook_url": url, "ok": ok}
-
-
 if __name__ == "__main__":
-    run_polling()
+    start_bot()

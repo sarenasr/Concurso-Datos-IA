@@ -3,6 +3,7 @@
 Handles catalog pagination (DDA catalog v1), views metadata, SoQL resource queries,
 and distinct-value sampling (used to validate proposed graph JOIN edges).
 """
+
 from __future__ import annotations
 
 from typing import Iterator
@@ -29,8 +30,30 @@ class SocrataClient:
         if app_token:
             headers["X-App-Token"] = app_token
         self.client = httpx.Client(base_url=self.base_url, headers=headers, timeout=timeout)
+        self._has_app_token = bool(app_token)
 
     # -- internal helpers -------------------------------------------------
+
+    @staticmethod
+    def _is_invalid_token_response(r: httpx.Response) -> bool:
+        """Detect the Socrata 'Invalid app_token specified' 403 permission error."""
+        if r.status_code != 403:
+            return False
+        try:
+            body = r.json()
+        except Exception:  # noqa: BLE001
+            return False
+        return body.get("code") == "permission_denied" and "app_token" in (
+            body.get("message") or ""
+        )
+
+    def _drop_app_token(self) -> None:
+        """Remove the X-App-Token header for the rest of this client's life."""
+        try:
+            del self.client.headers["X-App-Token"]
+        except KeyError:
+            pass
+        self._has_app_token = False
 
     def _get(self, path: str, params: dict | None = None) -> list | dict:
         resp = self._request_with_retry(path, params=params)
@@ -47,6 +70,13 @@ class SocrataClient:
             r = self.client.get(path, params=params)
             if r.status_code == 429 or r.status_code >= 500:
                 raise SocrataRetryableError(f"{r.status_code} {r.text[:200]}")
+            # An invalid/expired app token yields a 403 permission_denied.
+            # Fall back to anonymous requests (lower rate limit, but works).
+            if self._is_invalid_token_response(r) and self._has_app_token:
+                self._drop_app_token()
+                r = self.client.get(path, params=params)
+                if r.status_code == 429 or r.status_code >= 500:
+                    raise SocrataRetryableError(f"{r.status_code} {r.text[:200]}")
             r.raise_for_status()
             return r
 
@@ -67,7 +97,12 @@ class SocrataClient:
         yielded = 0
         while True:
             params = {"domains": self.domain, "limit": page_size, "offset": offset}
-            data = self._get("/api/catalog/v1", params=params)
+            try:
+                data = self._get("/api/catalog/v1", params=params)
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 400 and offset > 0:
+                    break
+                raise
             results = data.get("results", []) if isinstance(data, dict) else []
             if not results:
                 break

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "agent": {
+    "backend-dev": {
+      "model": "opencode-go/qwen3.7-plus"
+    },
+    "frontend-dev": {
+      "model": "opencode-go/qwen3.7-plus"
+    },
+    "general": {
+      "model": "opencode-go/qwen3.7-plus"
+    },
+    "reviewer": {
+      "model": "opencode-go/kimi-k2.7-code"
+    }
+  }
+}

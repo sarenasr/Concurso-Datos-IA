@@ -2,52 +2,58 @@
 
 Runnable standalone:
     uv run python -m app.mcp_server.server
+
+The five tools mirror :mod:`app.agents.tools` so external MCP clients get the
+exact same implementations as the in-process agent.
 """
+
 from __future__ import annotations
 
-from app.agents import tools as T
-from app.mcp_server import server as _self  # noqa: F401 (avoid name clash helper)
+from mcp.server.fastmcp import FastMCP
+
+from app.agents.tools import (
+    get_schema,
+    graph_neighbors,
+    make_chart,
+    query_dataset,
+    search_catalog,
+)
+
+mcp = FastMCP("DATIA")
 
 
-def _make_server():
-    from mcp.server.fastmcp import FastMCP
-
-    mcp = FastMCP("datia")
-
-    @mcp.tool()
-    def search_catalog(query: str, sector: str | None = None, k: int = 10) -> list[dict]:
-        """Find Colombian open-data datasets relevant to a natural-language query."""
-        return T.search_catalog_tool(query, sector=sector, k=k)
-
-    @mcp.tool()
-    def get_schema(dataset_id: str) -> dict | None:
-        """Return the cached schema (columns + types) for a dataset id."""
-        return T.get_schema(dataset_id)
-
-    @mcp.tool()
-    def query_dataset(dataset_id: str, soql: str) -> list[dict]:
-        """Run a SoQL query against a Socrata dataset and return rows."""
-        return T.query_dataset(dataset_id, soql)
-
-    @mcp.tool()
-    def graph_neighbors(dataset_id: str) -> list[dict]:
-        """Return datasets related to a dataset (joinable / same-topic / located-in)."""
-        return T.graph_neighbors_tool(dataset_id)
-
-    @mcp.tool()
-    def make_chart(data: list[dict], x: str, y: str, title: str = "", mark: str = "bar") -> dict:
-        """Build a Vega-Lite spec from tabular data + an x/y intent."""
-        return T.make_chart(data, x=x, y=y, title=title, mark=mark)
-
-    return mcp
+@mcp.tool()
+def search_catalog_tool(query: str, k: int = 5) -> list[dict]:
+    """Search the Colombian open data catalog for datasets matching a natural language query."""
+    return search_catalog(query, k)
 
 
-server = _make_server()
+@mcp.tool()
+def get_schema_tool(dataset_id: str) -> dict | None:
+    """Return the cached schema (columns + types) for a Socrata dataset id."""
+    return get_schema(dataset_id)
 
 
-def main() -> None:
-    server.run()
+@mcp.tool()
+def query_dataset_tool(dataset_id: str, soql: str) -> dict:
+    """Run a SoQL query against a Socrata dataset.
+
+    Returns ``{rows: list[dict], count: int, error: str | None}``.
+    """
+    return query_dataset(dataset_id, soql)
+
+
+@mcp.tool()
+def graph_neighbors_tool(dataset_id: str) -> list[dict]:
+    """Return datasets related to a dataset (joinable / same-topic / located-in)."""
+    return graph_neighbors(dataset_id)
+
+
+@mcp.tool()
+def make_chart_tool(data: list[dict], intent: str = "") -> dict:
+    """Build a Vega-Lite spec from tabular data using heuristic mark selection."""
+    return make_chart(data, intent=intent)
 
 
 if __name__ == "__main__":
-    main()
+    mcp.run()

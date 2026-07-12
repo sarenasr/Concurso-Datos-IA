@@ -1,61 +1,52 @@
-"""Gemini text embeddings via the google-genai SDK.
+"""Local multilingual embeddings via sentence-transformers.
 
-Uses `text-embedding-004` (768-dimensional). Batched at 100 inputs per request.
-Free-tier rate limit is ~1500 rpm / 1m tpm — we batch and retry with backoff.
-
-Import is `from google import genai` (package name on PyPI is `google-genai`).
+Uses `paraphrase-multilingual-mpnet-base-v2` (768-dim, ~1.1GB download on first use).
+No API key, no rate limits, runs fully offline after first download.
+Strong multilingual support (Spanish, English, etc.).
 """
+
 from __future__ import annotations
 
 from typing import Iterable
 
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-
-from app.config import settings
-
-EMBEDDING_MODEL = "text-embedding-004"
+EMBEDDING_MODEL = "paraphrase-multilingual-mpnet-base-v2"
 EMBEDDING_DIM = 768
-BATCH_SIZE = 100
+BATCH_SIZE = 64
+
+_model = None
 
 
 class EmbeddingError(Exception):
     pass
 
 
-def _client():
-    from google import genai  # imported lazily so the module imports without a key
-    return genai.Client(api_key=settings.gemini_api_key)
+def _get_model():
+    global _model
+    if _model is None:
+        from sentence_transformers import SentenceTransformer
 
-
-@retry(
-    stop=stop_after_attempt(4),
-    wait=wait_exponential(multiplier=1, min=1, max=10),
-    retry=retry_if_exception_type(Exception),
-    reraise=True,
-)
-def _embed_batch(client, texts: list[str]) -> list[list[float]]:
-    result = client.models.embed_content(
-        model=EMBEDDING_MODEL,
-        contents=texts,
-    )
-    # google-genai returns an object with `.embeddings`
-    return [list(e.values) for e in result.embeddings]
+        print(
+            f"  loading embedding model '{EMBEDDING_MODEL}' (first run downloads ~1.1GB)...",
+            flush=True,
+        )
+        _model = SentenceTransformer(EMBEDDING_MODEL)
+        print("  model loaded", flush=True)
+    return _model
 
 
 def embed_texts(texts: Iterable[str]) -> list[list[float]]:
-    """Embed an iterable of strings with Gemini text-embedding-004 (768-dim).
+    """Embed an iterable of strings (768-dim, multilingual).
 
-    Batches at 100 inputs. Returns a list aligned 1:1 with the input order.
+    Batches at BATCH_SIZE. Returns a list aligned 1:1 with the input order.
     """
     texts = list(texts)
     if not texts:
         return []
-    client = _client()
-    out: list[list[float]] = []
-    for i in range(0, len(texts), BATCH_SIZE):
-        chunk = texts[i : i + BATCH_SIZE]
-        out.extend(_embed_batch(client, chunk))
-    return out
+    model = _get_model()
+    vectors = model.encode(
+        texts, batch_size=BATCH_SIZE, show_progress_bar=False, convert_to_numpy=True
+    )
+    return [list(map(float, v)) for v in vectors]
 
 
 def embed_text(text: str) -> list[float]:
