@@ -1,3 +1,5 @@
+"use client";
+
 import { Chat } from "@/components/chat";
 import { Database } from "lucide-react";
 
