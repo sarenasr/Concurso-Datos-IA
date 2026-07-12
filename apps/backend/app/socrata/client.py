@@ -26,7 +26,11 @@ class SocrataClient:
     def __init__(self, domain: str, app_token: str = "", *, timeout: float = 30.0) -> None:
         self.domain = domain
         self.base_url = f"https://{domain}"
-        headers = {"User-Agent": "DATIA/0.1"}
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "Accept": "application/json",
+            "Accept-Language": "es-CO,es;q=0.9,en;q=0.8",
+        }
         if app_token:
             headers["X-App-Token"] = app_token
         self.client = httpx.Client(base_url=self.base_url, headers=headers, timeout=timeout)
@@ -72,7 +76,7 @@ class SocrataClient:
                 raise SocrataRetryableError(f"{r.status_code} {r.text[:200]}")
             # An invalid/expired app token yields a 403 permission_denied.
             # Fall back to anonymous requests (lower rate limit, but works).
-            if self._is_invalid_token_response(r) and self._has_app_token:
+            if r.status_code == 403 and self._has_app_token:
                 self._drop_app_token()
                 r = self.client.get(path, params=params)
                 if r.status_code == 429 or r.status_code >= 500:

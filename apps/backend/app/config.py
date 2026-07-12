@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     litellm_api_base: str = ""
     litellm_api_key: str = ""
     openai_api_key: str = ""
+    openrouter_api_key: str = ""
 
     # Embeddings (Gemini free tier) — multiple keys for quota cycling
     gemini_api_key: str = ""

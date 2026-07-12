@@ -51,13 +51,17 @@ def llm_complete(messages: list[dict], temperature: float = 0) -> str:
         "temperature": temperature,
         "timeout": 30,
     }
-    if settings.litellm_api_base:
+
+    if settings.openrouter_api_key:
+        model = f"openrouter/{model}"
+        kwargs["api_key"] = settings.openrouter_api_key
+    elif settings.litellm_api_base:
         if not model.startswith("openai/"):
             model = f"openai/{model}"
         kwargs["api_base"] = settings.litellm_api_base
-    key = settings.litellm_api_key_resolved
-    if key:
-        kwargs["api_key"] = key
+        key = settings.litellm_api_key_resolved
+        if key:
+            kwargs["api_key"] = key
     resp = litellm.completion(model=model, **kwargs)
     return resp["choices"][0]["message"]["content"]  # type: ignore[index]
 
@@ -80,13 +84,16 @@ def llm_complete_small(messages: list[dict], temperature: float = 0) -> str:
         "temperature": temperature,
         "timeout": 30,
     }
-    if settings.litellm_api_base:
+    if settings.openrouter_api_key:
+        model = f"openrouter/{model}"
+        kwargs["api_key"] = settings.openrouter_api_key
+    elif settings.litellm_api_base:
         if not model.startswith("openai/"):
             model = f"openai/{model}"
         kwargs["api_base"] = settings.litellm_api_base
-    key = settings.litellm_api_key_resolved
-    if key:
-        kwargs["api_key"] = key
+        key = settings.litellm_api_key_resolved
+        if key:
+            kwargs["api_key"] = key
     resp = litellm.completion(model=model, **kwargs)
     return resp["choices"][0]["message"]["content"]  # type: ignore[index]
 
