@@ -50,3 +50,16 @@ When dispatching Task subagents, use cheaper OpenCode Go models — NOT the defa
 - **Hard tasks** (complex logic, architecture, debugging): `kimi-k2.7-code`
 
 This conserves GLM-5.2 tokens for planning and review only.
+
+These overrides are configured in `opencode.json`. After editing it, restart opencode for changes to take effect.
+
+## Subagent Skill Usage (IMPORTANT)
+
+Subagents MUST load relevant skills before starting work. When dispatching subagents, instruct them to use the `skill` tool with these skill names as appropriate:
+
+- **Backend agent/RAG work**: `langgraph-patterns`, `socrata-soql`, `systematic-debugging`
+- **Frontend UI work**: `frontend-design`, `vega-lite`, `ui-ux-pro-max`
+- **MCP server work**: `mcp-builder`
+- **Any coding task**: `test-driven-development`, `verification-before-completion`
+- **Planning/architecture**: `writing-plans`, `brainstorming`
+- **Debugging**: `systematic-debugging`

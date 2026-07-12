@@ -13,5 +13,41 @@
     "reviewer": {
       "model": "opencode-go/kimi-k2.7-code"
     }
+  },
+  "permission": {
+    "bash": {
+      "uv *": "allow",
+      "pnpm *": "allow",
+      "git *": "allow",
+      "ruff *": "allow",
+      "node *": "allow",
+      "npx *": "allow",
+      "npm *": "allow",
+      "python *": "allow",
+      "python3 *": "allow",
+      "pip *": "allow",
+      "cd *": "allow",
+      "ls *": "allow",
+      "dir *": "allow",
+      "cat *": "allow",
+      "echo *": "allow",
+      "mkdir *": "allow",
+      "cp *": "allow",
+      "mv *": "allow",
+      "rm *": "allow",
+      "touch *": "allow",
+      "chmod *": "allow",
+      "curl *": "allow",
+      "wget *": "allow",
+      "docker *": "allow",
+      "docker-compose *": "allow",
+      "expo *": "allow",
+      "tsc *": "allow",
+      "eslint *": "allow",
+      "prettier *": "allow",
+      "playwright *": "allow",
+      "supabase *": "allow",
+      "*": "ask"
+    }
   }
 }
