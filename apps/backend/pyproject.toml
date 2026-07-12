@@ -3,7 +3,7 @@ name = "datia-backend"
 version = "0.1.0"
 description = "DATIA — AI assistant for Colombian open data (datos.gov.co)"
 requires-python = ">=3.11"
-readme = "README.md"
+readme = "../README.md"
 dependencies = [
   "fastapi>=0.115",
   "uvicorn[standard]>=0.30",

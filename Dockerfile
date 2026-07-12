@@ -4,6 +4,7 @@ RUN pip install uv
 
 WORKDIR /app
 
+COPY README.md ./README.md
 COPY apps/backend/pyproject.toml apps/backend/uv.lock ./apps/backend/
 RUN cd apps/backend && uv sync
 
