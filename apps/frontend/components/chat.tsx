@@ -177,7 +177,7 @@ function AssistantBubble({ msg }: { msg: AssistantMsg }) {
 /*  Chat Component                                                     */
 /* ------------------------------------------------------------------ */
 
-export function Chat() {
+export function Chat({ compact = false }: { compact?: boolean } = {}) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -310,29 +310,74 @@ export function Chat() {
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
-      {/* Messages area */}
       <div className="flex-1 overflow-y-auto chat-scroll">
-        <div className="mx-auto w-full max-w-3xl px-4 py-6 pb-4">
+        <div
+          className={
+            compact
+              ? "mx-auto w-full px-3 py-4"
+              : "mx-auto w-full max-w-3xl px-4 py-6 pb-4"
+          }
+        >
           {isEmpty ? (
-            /* ---- Empty state ---- */
-            <div className="flex flex-col items-center justify-center py-12 md:py-20 text-center">
-              <div className="mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-colombia-yellow/15 ring-2 ring-colombia-yellow/20">
-                <MessageCircle className="h-10 w-10 text-colombia-yellow" strokeWidth={1.75} />
+            <div
+              className={
+                compact
+                  ? "flex flex-col items-center justify-center py-6 text-center"
+                  : "flex flex-col items-center justify-center py-12 md:py-20 text-center"
+              }
+            >
+              <div
+                className={
+                  compact
+                    ? "mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-colombia-yellow/15 ring-2 ring-colombia-yellow/20"
+                    : "mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-colombia-yellow/15 ring-2 ring-colombia-yellow/20"
+                }
+              >
+                <MessageCircle
+                  className={
+                    compact
+                      ? "h-6 w-6 text-colombia-yellow"
+                      : "h-10 w-10 text-colombia-yellow"
+                  }
+                  strokeWidth={1.75}
+                />
               </div>
-              <h2 className="mb-2 text-2xl font-bold tracking-tight text-foreground md:text-3xl">
+              <h2
+                className={
+                  compact
+                    ? "mb-1 text-base font-bold tracking-tight text-foreground"
+                    : "mb-2 text-2xl font-bold tracking-tight text-foreground md:text-3xl"
+                }
+              >
                 ¿Qué quieres saber hoy?
               </h2>
-              <p className="mb-10 max-w-md text-sm text-muted-foreground leading-relaxed">
+              <p
+                className={
+                  compact
+                    ? "mb-4 max-w-xs text-xs text-muted-foreground leading-relaxed"
+                    : "mb-10 max-w-md text-sm text-muted-foreground leading-relaxed"
+                }
+              >
                 Pregúntame sobre datos abiertos de Colombia. Busco en datos.gov.co,
                 escribo la consulta y te doy la respuesta con fuentes.
               </p>
-              <div className="flex flex-wrap justify-center gap-2.5">
+              <div
+                className={
+                  compact
+                    ? "flex flex-wrap justify-center gap-1.5"
+                    : "flex flex-wrap justify-center gap-2.5"
+                }
+              >
                 {EXAMPLES.map((q) => (
                   <button
                     key={q}
                     type="button"
                     onClick={() => send(q)}
-                    className="rounded-full border border-border bg-card px-4 py-2.5 text-sm text-foreground shadow-sm transition-all duration-200 hover:border-colombia-yellow hover:bg-colombia-yellow/10 hover:shadow-md hover:shadow-colombia-yellow/5 active:scale-[0.98]"
+                    className={
+                      compact
+                        ? "rounded-full border border-border bg-card px-3 py-1.5 text-xs text-foreground shadow-sm transition-all duration-200 hover:border-colombia-yellow hover:bg-colombia-yellow/10 hover:shadow-md hover:shadow-colombia-yellow/5 active:scale-[0.98]"
+                        : "rounded-full border border-border bg-card px-4 py-2.5 text-sm text-foreground shadow-sm transition-all duration-200 hover:border-colombia-yellow hover:bg-colombia-yellow/10 hover:shadow-md hover:shadow-colombia-yellow/5 active:scale-[0.98]"
+                    }
                   >
                     {q}
                   </button>
@@ -340,8 +385,7 @@ export function Chat() {
               </div>
             </div>
           ) : (
-            /* ---- Messages ---- */
-            <div className="space-y-6">
+            <div className={compact ? "space-y-4" : "space-y-6"}>
               {messages.map((msg, i) => (
                 <div
                   key={i}
@@ -380,9 +424,20 @@ export function Chat() {
         </div>
       </div>
 
-      {/* ---- Input area (fixed bottom) ---- */}
-      <div className="shrink-0 border-t border-border/60 bg-background/95 backdrop-blur-sm">
-        <div className="mx-auto flex w-full max-w-3xl items-end gap-2 px-4 py-3">
+      <div
+        className={
+          compact
+            ? "shrink-0 border-t border-border/60 bg-background/95 backdrop-blur-sm"
+            : "shrink-0 border-t border-border/60 bg-background/95 backdrop-blur-sm"
+        }
+      >
+        <div
+          className={
+            compact
+              ? "mx-auto flex w-full items-end gap-2 px-3 py-2.5"
+              : "mx-auto flex w-full max-w-3xl items-end gap-2 px-4 py-3"
+          }
+        >
           <textarea
             ref={textareaRef}
             value={input}

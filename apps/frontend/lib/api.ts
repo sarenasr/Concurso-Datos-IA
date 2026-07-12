@@ -54,25 +54,33 @@ export async function streamChat(
     const chunks = buffer.split("\n\n");
     buffer = chunks.pop() || "";
     for (const chunk of chunks) {
-      const lines = chunk.split("\n");
-      for (const line of lines) {
-        if (!line.startsWith("data:")) continue;
-        const payload = line.slice(5).trim();
-        if (payload === "[DONE]") return;
-        if (!payload) continue;
-        try {
-          const obj = JSON.parse(payload);
-          if (obj.type) onEvent(obj as ChatEvent);
-        } catch {
-          // ignore non-JSON payloads
-        }
-      }
+      parseSSEChunk(chunk, onEvent);
+    }
+  }
+
+  // Process any remaining buffer after stream ends
+  if (buffer.trim()) {
+    parseSSEChunk(buffer, onEvent);
+  }
+}
+
+function parseSSEChunk(chunk: string, onEvent: (event: ChatEvent) => void): void {
+  const lines = chunk.split("\n");
+  for (const line of lines) {
+    if (!line.startsWith("data:")) continue;
+    const payload = line.slice(5).trim();
+    if (payload === "[DONE]" || !payload) continue;
+    try {
+      const obj = JSON.parse(payload);
+      if (obj.type) onEvent(obj as ChatEvent);
+    } catch {
+      // ignore non-JSON payloads
     }
   }
 }
 
 export function soqlPermalink(datasetId: string, soql: string): string {
-  const base = `https://www.datos.gov.co/resource/${datasetId}.json`;
+  const base = `https://www.datos.gov.co/d/${datasetId}`;
   return soql ? `${base}?${soql.replace(/^\?/, "")}` : base;
 }
 

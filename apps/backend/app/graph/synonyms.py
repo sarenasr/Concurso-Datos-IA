@@ -4,6 +4,7 @@ Colombian open-data datasets repeat the same concept under many spellings
 (nit_entidad, nit_de_la_entidad, cod_dane, codigodane, municipio_id, ...).
 We canonicalize them so the graph builder can propose JOINABLE_ON edges.
 """
+
 from __future__ import annotations
 
 import re

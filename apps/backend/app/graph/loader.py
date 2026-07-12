@@ -4,6 +4,7 @@ Loads `graph_nodes` + `graph_edges` from Supabase into a networkx graph and
 exposes `graph_neighbors(dataset_id)` so the agent can find joinable / related
 datasets.
 """
+
 from __future__ import annotations
 
 import networkx as nx
@@ -32,7 +33,13 @@ def load_graph() -> nx.Graph:
         g.add_node(n["id"], **{k: v for k, v in n.items() if k != "id"})
     for e in edges:
         if g.has_node(e["src"]) and g.has_node(e["dst"]):
-            g.add_edge(e["src"], e["dst"], type=e["type"], confidence=e.get("confidence"), extra=e.get("extra"))
+            g.add_edge(
+                e["src"],
+                e["dst"],
+                type=e["type"],
+                confidence=e.get("confidence"),
+                extra=e.get("extra"),
+            )
     _GRAPH = g
     return g
 

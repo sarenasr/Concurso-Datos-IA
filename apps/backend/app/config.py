@@ -34,6 +34,7 @@ class Settings(BaseSettings):
 
     # LLM via LiteLLM (provider-agnostic, OpenAI-compatible)
     litellm_model: str = "gpt-4.1-mini"
+    litellm_small_model: str = "qwen3.7-plus"
     litellm_api_base: str = ""
     litellm_api_key: str = ""
     openai_api_key: str = ""

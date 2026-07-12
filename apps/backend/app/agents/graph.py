@@ -62,6 +62,35 @@ def llm_complete(messages: list[dict], temperature: float = 0) -> str:
     return resp["choices"][0]["message"]["content"]  # type: ignore[index]
 
 
+def llm_complete_small(messages: list[dict], temperature: float = 0) -> str:
+    """Lightweight completion call using the small/fast model.
+
+    Used for structured tasks like SoQL generation where the big model is
+    overkill.  Falls back to :func:`llm_complete` when no small model is
+    configured.
+    """
+    import litellm
+
+    model = settings.litellm_small_model
+    if not model:
+        return llm_complete(messages, temperature=temperature)
+
+    kwargs: dict[str, Any] = {
+        "messages": messages,
+        "temperature": temperature,
+        "timeout": 30,
+    }
+    if settings.litellm_api_base:
+        if not model.startswith("openai/"):
+            model = f"openai/{model}"
+        kwargs["api_base"] = settings.litellm_api_base
+    key = settings.litellm_api_key_resolved
+    if key:
+        kwargs["api_key"] = key
+    resp = litellm.completion(model=model, **kwargs)
+    return resp["choices"][0]["message"]["content"]  # type: ignore[index]
+
+
 # --- Prompts ---------------------------------------------------------------
 
 SOQL_SYSTEM_PROMPT = (
@@ -158,20 +187,30 @@ def _hero_match(question: str) -> str | None:
     return None
 
 
-def _column_brief(schema: dict | None) -> str:
-    """Build a compact `field_name (datatype): name` listing for the LLM."""
+def _column_brief(schema: dict | None, max_cols: int = 30) -> str:
+    """Build a compact `field_name (datatype): name` listing for the LLM.
+
+    Limited to *max_cols* columns (default 30) to keep the prompt small for
+    datasets with many columns.  Column descriptions are truncated to 50 chars.
+    """
     if not schema:
         return ""
     cols = schema.get("columns", []) or []
-    return "\n".join(
-        f"- {c.get('field_name', '')} ({c.get('datatype', '')}): {c.get('name', '')}" for c in cols
-    )
+    lines = []
+    for c in cols[:max_cols]:
+        name = c.get("name", "")
+        if len(name) > 50:
+            name = name[:47] + "..."
+        lines.append(f"- {c.get('field_name', '')} ({c.get('datatype', '')}): {name}")
+    if len(cols) > max_cols:
+        lines.append(f"... ({len(cols) - max_cols} more columns omitted)")
+    return "\n".join(lines)
 
 
-def _few_shots_text() -> str:
-    return "\n".join(
-        f"- Q: {p['user_question']}\n  SoQL: {p['soql']}" for p in few_shots.load_patterns()
-    )
+def _few_shots_text(max_patterns: int = 3) -> str:
+    """Return a compact few-shot text block, limited to *max_patterns* entries."""
+    patterns = few_shots.load_patterns()[:max_patterns]
+    return "\n".join(f"- Q: {p['user_question']}\n  SoQL: {p['soql']}" for p in patterns)
 
 
 def _clean_soql(raw: str) -> str:
@@ -325,7 +364,7 @@ def generate_soql_node(state: AgentState) -> AgentState:
 
     messages = _build_soql_messages(state, correction=correction)
     try:
-        soql = _clean_soql(llm_complete(messages, temperature=0))
+        soql = _clean_soql(llm_complete_small(messages, temperature=0))
     except Exception as exc:  # noqa: BLE001
         log.exception("generate_soql LLM call failed: %s", exc)
         soql = ""
@@ -453,6 +492,14 @@ def route_after_check(state: AgentState) -> str:
     return "answer"
 
 
+# --- Question cache ---------------------------------------------------------
+
+# Simple in-memory cache: question -> final AgentState.
+# Bounded to _CACHE_MAX entries (FIFO eviction).
+_CACHE_MAX = 100
+_question_cache: dict[str, AgentState] = {}
+
+
 # --- Build the graph -------------------------------------------------------
 
 
@@ -485,7 +532,16 @@ def run_agent(question: str) -> AgentState:
 
     Returns the full AgentState dict: answer, chart, sources, soql, dataset_id,
     datasets, retry_count, and step.
+
+    Results are cached in memory: if the exact same question was asked before,
+    the cached state is returned instantly without re-running the agent.
     """
+    # Check cache first
+    cached = _question_cache.get(question)
+    if cached is not None:
+        log.info("Cache hit for question: %s", question[:60])
+        return cached
+
     agent = build_agent()
     initial_state: AgentState = {
         "question": question,
@@ -501,4 +557,11 @@ def run_agent(question: str) -> AgentState:
         "step": "search",
     }
     result = agent.invoke(initial_state)
+
+    # Store in cache (FIFO eviction when full)
+    if len(_question_cache) >= _CACHE_MAX:
+        oldest_key = next(iter(_question_cache))
+        del _question_cache[oldest_key]
+    _question_cache[question] = result  # type: ignore[assignment]
+
     return result  # type: ignore[return-value]
