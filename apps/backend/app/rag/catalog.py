@@ -30,6 +30,7 @@ _VECTOR_WEIGHT = 0.6
 _TEXT_WEIGHT = 0.4
 
 
+@lru_cache(maxsize=1)
 def _supabase():
     from supabase import create_client
 
@@ -74,6 +75,9 @@ def _expand_synonyms(words: set[str]) -> set[str]:
         "desempleo": {"empleo", "trabajo"},
         "medicamento": {"medicamentos", "cum", "invima"},
         "medicamentos": {"medicamento", "cum", "invima"},
+        "habitantes": {"poblacion", "población", "censo", "demografia"},
+        "poblacion": {"habitantes", "población", "censo", "demografia"},
+        "población": {"habitantes", "poblacion", "censo", "demografia"},
     }
     expanded = set(words)
     for w in words:

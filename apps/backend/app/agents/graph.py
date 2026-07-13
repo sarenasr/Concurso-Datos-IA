@@ -23,6 +23,7 @@ from typing import Any, TypedDict
 
 import yaml
 from langgraph.graph import END, StateGraph
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 from app.agents import few_shots
 from app.agents import tools as T
@@ -38,31 +39,53 @@ _HERO_YAML = Path(__file__).resolve().parent.parent.parent / "data" / "hero_ques
 # --- LLM helper -----------------------------------------------------------
 
 
-def llm_complete(messages: list[dict], temperature: float = 0) -> str:
-    """Provider-agnostic completion via LiteLLM.
+def _completion_kwargs(model_name: str = "") -> dict[str, Any]:
+    """Build (model, kwargs) for a litellm.completion call from settings.
 
-    Returns the assistant message content as a string.
+    Routes through the OpenAI-compatible LITELLM_API_BASE (OpenCode Go) when
+    present, else uses OpenRouter if OPENROUTER_API_KEY is set, else uses the
+    model as-is with the default LiteLLM routing.
     """
-    import litellm
-
-    model = settings.litellm_model
-    kwargs: dict[str, Any] = {
-        "messages": messages,
-        "temperature": temperature,
-        "timeout": 30,
-    }
-
-    if settings.openrouter_api_key:
-        model = f"openrouter/{model}"
-        kwargs["api_key"] = settings.openrouter_api_key
-    elif settings.litellm_api_base:
+    model = model_name or settings.litellm_model
+    kwargs: dict[str, Any] = {"timeout": 30}
+    if settings.litellm_api_base:
         if not model.startswith("openai/"):
             model = f"openai/{model}"
         kwargs["api_base"] = settings.litellm_api_base
         key = settings.litellm_api_key_resolved
         if key:
             kwargs["api_key"] = key
-    resp = litellm.completion(model=model, **kwargs)
+    elif settings.openrouter_api_key:
+        if not model.startswith("openrouter/"):
+            model = f"openrouter/{model}"
+        kwargs["api_key"] = settings.openrouter_api_key
+    else:
+        key = settings.litellm_api_key_resolved
+        if key:
+            kwargs["api_key"] = key
+    return {"model": model, **kwargs}
+
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    reraise=True,
+)
+def _litellm_completion(model: str, **kwargs) -> Any:
+    """Call litellm.completion with retry/backoff for transient HTTP failures."""
+    import litellm
+
+    return litellm.completion(model=model, **kwargs)
+
+
+def llm_complete(messages: list[dict], temperature: float = 0) -> str:
+    """Provider-agnostic completion via LiteLLM.
+
+    Returns the assistant message content as a string.
+    """
+    kw = _completion_kwargs(settings.litellm_model)
+    model = kw.pop("model")
+    resp = _litellm_completion(model=model, messages=messages, temperature=temperature, **kw)
     return resp["choices"][0]["message"]["content"]  # type: ignore[index]
 
 
@@ -73,28 +96,11 @@ def llm_complete_small(messages: list[dict], temperature: float = 0) -> str:
     overkill.  Falls back to :func:`llm_complete` when no small model is
     configured.
     """
-    import litellm
-
-    model = settings.litellm_small_model
-    if not model:
+    if not settings.litellm_small_model:
         return llm_complete(messages, temperature=temperature)
-
-    kwargs: dict[str, Any] = {
-        "messages": messages,
-        "temperature": temperature,
-        "timeout": 30,
-    }
-    if settings.openrouter_api_key:
-        model = f"openrouter/{model}"
-        kwargs["api_key"] = settings.openrouter_api_key
-    elif settings.litellm_api_base:
-        if not model.startswith("openai/"):
-            model = f"openai/{model}"
-        kwargs["api_base"] = settings.litellm_api_base
-        key = settings.litellm_api_key_resolved
-        if key:
-            kwargs["api_key"] = key
-    resp = litellm.completion(model=model, **kwargs)
+    kw = _completion_kwargs(settings.litellm_small_model)
+    model = kw.pop("model")
+    resp = _litellm_completion(model=model, messages=messages, temperature=temperature, **kw)
     return resp["choices"][0]["message"]["content"]  # type: ignore[index]
 
 
@@ -364,6 +370,21 @@ def generate_soql_node(state: AgentState) -> AgentState:
         state["step"] = "generate_soql"
         return state
 
+    # If the previous attempt produced an empty query (LLM failed OR returned
+    # garbage) without an actionable correction error, don't burn another LLM
+    # call — bump the retry counter past the budget so routing goes to answer.
+    prev_result = state.get("query_result") or {}
+    prev_error = prev_result.get("error")
+    prev_soql = state.get("soql") or ""
+    if (
+        prev_error
+        and not prev_soql
+        and prev_error == "no_se_pudo_generar_la_consulta_o_no_hay_dataset"
+    ):
+        state["retry_count"] = MAX_RETRIES + 1
+        state["step"] = "generate_soql"
+        return state
+
     correction = None
     result = state.get("query_result")
     if result and result.get("error") and state.get("soql"):
@@ -510,8 +531,9 @@ _question_cache: dict[str, AgentState] = {}
 # --- Build the graph -------------------------------------------------------
 
 
+@lru_cache(maxsize=1)
 def build_agent():
-    """Construct and compile the LangGraph agent state graph."""
+    """Construct and compile the LangGraph agent state graph (cached)."""
     g = StateGraph(AgentState)
     g.add_node("search", search_node)
     g.add_node("schema", schema_node)

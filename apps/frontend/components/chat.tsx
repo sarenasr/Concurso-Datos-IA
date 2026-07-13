@@ -1,34 +1,45 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, memo, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
+import dynamic from "next/dynamic";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { SourcesCard } from "@/components/sources-card";
-import { VegaChart } from "@/components/vega-chart";
 import { streamChat, type Source, type ChatEvent } from "@/lib/api";
 import {
   Send,
   ChevronDown,
   ChevronRight,
   Code2,
-  Loader2,
   Sparkles,
   User,
   MessageCircle,
   AlertCircle,
 } from "lucide-react";
 
+const VegaChart = dynamic(
+  () => import("@/components/vega-chart").then((m) => m.VegaChart),
+  {
+    ssr: false,
+    loading: () => (
+      <p className="mt-3 text-xs text-muted-foreground">Cargando gráfico…</p>
+    ),
+  }
+);
+
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
 /* ------------------------------------------------------------------ */
 
 type UserMsg = {
+  id: string;
   role: "user";
   content: string;
 };
 
 type AssistantMsg = {
+  id: string;
   role: "assistant";
   thinking: string;
   query: string;
@@ -42,8 +53,9 @@ type AssistantMsg = {
 
 type Message = UserMsg | AssistantMsg;
 
-function emptyAssistant(): AssistantMsg {
+function emptyAssistant(id: string): AssistantMsg {
   return {
+    id,
     role: "assistant",
     thinking: "",
     query: "",
@@ -87,7 +99,13 @@ function ThinkingIndicator() {
 /*  SoQL Block                                                         */
 /* ------------------------------------------------------------------ */
 
-function SoQLBlock({ query, dataset }: { query: string; dataset: string }) {
+const SoQLBlock = memo(function SoQLBlock({
+  query,
+  dataset,
+}: {
+  query: string;
+  dataset: string;
+}) {
   const [open, setOpen] = useState(false);
   return (
     <div className="mt-3 rounded-lg border border-border/50 overflow-hidden">
@@ -118,13 +136,17 @@ function SoQLBlock({ query, dataset }: { query: string; dataset: string }) {
       )}
     </div>
   );
-}
+});
 
 /* ------------------------------------------------------------------ */
 /*  Assistant Bubble                                                   */
 /* ------------------------------------------------------------------ */
 
-function AssistantBubble({ msg }: { msg: AssistantMsg }) {
+const AssistantBubble = memo(function AssistantBubble({
+  msg,
+}: {
+  msg: AssistantMsg;
+}) {
   const hasContent =
     msg.thinking ||
     msg.query ||
@@ -133,9 +155,13 @@ function AssistantBubble({ msg }: { msg: AssistantMsg }) {
     msg.sources.length > 0 ||
     msg.error;
 
+  const renderedAnswer = useMemo(
+    () => <ReactMarkdown>{msg.answer}</ReactMarkdown>,
+    [msg.answer]
+  );
+
   return (
     <div className="space-y-1">
-      {/* Thinking text */}
       {msg.thinking && (
         <p className="text-sm italic text-muted-foreground">
           <Sparkles className="mr-1 inline h-3 w-3 text-colombia-yellow" />
@@ -143,26 +169,20 @@ function AssistantBubble({ msg }: { msg: AssistantMsg }) {
         </p>
       )}
 
-      {/* Thinking indicator when streaming with no content yet */}
       {msg.streaming && !msg.answer && !hasContent && <ThinkingIndicator />}
 
-      {/* SoQL query block */}
       {msg.query && <SoQLBlock query={msg.query} dataset={msg.dataset} />}
 
-      {/* Answer */}
       {msg.answer && (
         <div className="prose prose-sm mt-2 max-w-none dark:prose-invert prose-p:leading-relaxed prose-pre:bg-muted prose-pre:text-foreground prose-headings:text-foreground prose-a:text-colombia-blue">
-          <ReactMarkdown>{msg.answer}</ReactMarkdown>
+          {renderedAnswer}
         </div>
       )}
 
-      {/* Chart */}
       {msg.chart && <VegaChart spec={msg.chart} />}
 
-      {/* Sources */}
       {msg.sources.length > 0 && <SourcesCard sources={msg.sources} />}
 
-      {/* Error */}
       {msg.error && (
         <div className="flex items-start gap-2 rounded-lg bg-destructive/10 border border-destructive/20 px-3 py-2.5 text-sm text-destructive">
           <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
@@ -171,7 +191,7 @@ function AssistantBubble({ msg }: { msg: AssistantMsg }) {
       )}
     </div>
   );
-}
+});
 
 /* ------------------------------------------------------------------ */
 /*  Chat Component                                                     */
@@ -184,12 +204,24 @@ export function Chat({ compact = false }: { compact?: boolean } = {}) {
   const abortRef = useRef<AbortController | null>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const isPinnedRef = useRef(true);
+  const idRef = useRef(0);
+
+  const nextId = useCallback(() => `${++idRef.current}`, []);
+
+  const onScroll = useCallback(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    isPinnedRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  }, []);
 
   useEffect(() => {
-    sentinelRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (!isPinnedRef.current) return;
+    sentinelRef.current?.scrollIntoView({ behavior: "auto" });
   }, [messages]);
 
-  // Auto-resize textarea
   useEffect(() => {
     const el = textareaRef.current;
     if (el) {
@@ -209,8 +241,8 @@ export function Chat({ compact = false }: { compact?: boolean } = {}) {
 
       if (abortRef.current) abortRef.current.abort();
 
-      const userMsg: UserMsg = { role: "user", content };
-      const assistantMsg: AssistantMsg = emptyAssistant();
+      const userMsg: UserMsg = { id: nextId(), role: "user", content };
+      const assistantMsg: AssistantMsg = emptyAssistant(nextId());
 
       const history = [...messages, userMsg];
       setMessages((prev) => [...prev, userMsg, assistantMsg]);
@@ -230,10 +262,11 @@ export function Chat({ compact = false }: { compact?: boolean } = {}) {
           inputMessages,
           (event: ChatEvent) => {
             setMessages((prev) => {
-              const copy = [...prev];
-              const last = copy[copy.length - 1];
-              if (!last || last.role !== "assistant") return prev;
-              const updated = { ...last };
+              const idx = prev.findIndex(
+                (m) => m.role === "assistant" && m.id === assistantMsg.id
+              );
+              if (idx < 0) return prev;
+              const updated = { ...(prev[idx] as AssistantMsg) };
               switch (event.type) {
                 case "thinking":
                   updated.thinking = event.content;
@@ -252,14 +285,24 @@ export function Chat({ compact = false }: { compact?: boolean } = {}) {
                   updated.sources = event.content;
                   break;
               }
-              copy[copy.length - 1] = updated;
+              const copy = [...prev];
+              copy[idx] = updated;
               return copy;
             });
           },
           controller.signal
         );
       } catch (err) {
-        if (err instanceof DOMException && err.name === "AbortError") return;
+        if (err instanceof DOMException && err.name === "AbortError") {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.role === "assistant" && m.id === assistantMsg.id
+                ? { ...m, streaming: false }
+                : m
+            )
+          );
+          return;
+        }
 
         const isNetworkError =
           err instanceof TypeError &&
@@ -274,29 +317,30 @@ export function Chat({ compact = false }: { compact?: boolean } = {}) {
             : "Error desconocido";
 
         setMessages((prev) => {
-          const copy = [...prev];
-          const last = copy[copy.length - 1];
-          if (last && last.role === "assistant") {
-            copy[copy.length - 1] = {
-              ...last,
-              error: errorMessage,
-            };
-          }
-          return copy;
+          const target = prev.find(
+            (m) => m.role === "assistant" && m.id === assistantMsg.id
+          );
+          if (!target) return prev;
+          return prev.map((m) =>
+            m.role === "assistant" && m.id === assistantMsg.id
+              ? { ...m, error: errorMessage }
+              : m
+          );
         });
       } finally {
-        setMessages((prev) => {
-          const copy = [...prev];
-          const last = copy[copy.length - 1];
-          if (last && last.role === "assistant") {
-            copy[copy.length - 1] = { ...last, streaming: false };
-          }
-          return copy;
-        });
-        setLoading(false);
+        if (abortRef.current === controller) {
+          setLoading(false);
+        }
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.role === "assistant" && m.id === assistantMsg.id
+              ? { ...m, streaming: false }
+              : m
+          )
+        );
       }
     },
-    [input, loading, messages]
+    [input, loading, messages, nextId]
   );
 
   function onKey(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -310,7 +354,11 @@ export function Chat({ compact = false }: { compact?: boolean } = {}) {
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
-      <div className="flex-1 overflow-y-auto chat-scroll">
+      <div
+        ref={scrollerRef}
+        onScroll={onScroll}
+        className="flex-1 overflow-y-auto chat-scroll"
+      >
         <div
           className={
             compact
@@ -386,9 +434,9 @@ export function Chat({ compact = false }: { compact?: boolean } = {}) {
             </div>
           ) : (
             <div className={compact ? "space-y-4" : "space-y-6"}>
-              {messages.map((msg, i) => (
+              {messages.map((msg) => (
                 <div
-                  key={i}
+                  key={msg.id}
                   className={`flex gap-3 ${
                     msg.role === "user" ? "justify-end" : "justify-start"
                   }`}
@@ -424,13 +472,7 @@ export function Chat({ compact = false }: { compact?: boolean } = {}) {
         </div>
       </div>
 
-      <div
-        className={
-          compact
-            ? "shrink-0 border-t border-border/60 bg-background/95 backdrop-blur-sm"
-            : "shrink-0 border-t border-border/60 bg-background/95 backdrop-blur-sm"
-        }
-      >
+      <div className="shrink-0 border-t border-border/60 bg-background/95">
         <div
           className={
             compact
@@ -448,18 +490,27 @@ export function Chat({ compact = false }: { compact?: boolean } = {}) {
             rows={1}
             className="flex-1 resize-none rounded-xl border border-border bg-muted/50 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-colombia-yellow/40 focus:border-colombia-yellow/40 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
           />
-          <Button
-            onClick={() => send()}
-            disabled={loading || !input.trim()}
-            size="icon"
-            className="h-11 w-11 shrink-0 rounded-xl bg-colombia-yellow text-accent-foreground shadow-sm hover:bg-colombia-yellow/90 disabled:opacity-40 transition-all"
-          >
-            {loading ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
+          {loading ? (
+            <Button
+              onClick={() => abortRef.current?.abort()}
+              size="icon"
+              className="h-11 w-11 shrink-0 rounded-xl bg-destructive/10 text-destructive border border-destructive/30 shadow-sm hover:bg-destructive/20 transition-all"
+              aria-label="Detener"
+              title="Detener generación"
+            >
+              <span className="h-3.5 w-3.5 block rounded-sm bg-destructive" />
+            </Button>
+          ) : (
+            <Button
+              onClick={() => send()}
+              disabled={!input.trim()}
+              size="icon"
+              className="h-11 w-11 shrink-0 rounded-xl bg-colombia-yellow text-accent-foreground shadow-sm hover:bg-colombia-yellow/90 disabled:opacity-40 transition-all"
+              aria-label="Enviar"
+            >
               <Send className="h-4 w-4" />
-            )}
-          </Button>
+            </Button>
+          )}
         </div>
       </div>
     </div>

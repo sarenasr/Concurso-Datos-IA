@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from functools import lru_cache
 from typing import Any
 
 from fastapi import FastAPI, Query, Request
@@ -16,6 +17,15 @@ from app.config import settings
 from app.socrata.client import SocrataClient
 
 log = logging.getLogger("datia.api")
+
+_STEP_LABELS = {
+    "search": "Buscando datasets relevantes en datos.gov.co...",
+    "schema": "Analizando el esquema del dataset seleccionado...",
+    "generate_soql": "Generando la consulta SoQL...",
+    "execute_query": "Ejecutando la consulta en datos.gov.co...",
+    "check_result": "Validando el resultado de la consulta...",
+    "answer": "Redactando la respuesta final...",
+}
 
 app = FastAPI(title="DATIA", version="0.1.0")
 
@@ -70,6 +80,29 @@ async def _run_agent_async(question: str) -> dict:
     return await asyncio.to_thread(run_agent, question)
 
 
+@lru_cache(maxsize=1)
+def _proxy_socrata() -> SocrataClient:
+    """Shared SocrataClient singleton for the /api/query proxy."""
+    return SocrataClient(settings.socrata_domain, settings.socrata_app_token)
+
+
+def _emit_result_events(state: dict) -> list[str]:
+    """Yield SSE events for query/answer/chart/sources from final state."""
+    events: list[str] = []
+    soql = state.get("soql") or ""
+    dataset_id = state.get("dataset_id") or ""
+    if dataset_id:
+        events.append(_sse({"type": "query", "content": soql, "dataset": dataset_id}))
+    answer = state.get("answer") or "Sin respuesta."
+    events.append(_sse({"type": "answer", "content": answer}))
+    chart = state.get("chart")
+    if chart:
+        events.append(_sse({"type": "chart", "content": chart}))
+    sources = state.get("sources") or []
+    events.append(_sse({"type": "sources", "content": sources}))
+    return events
+
+
 # --- Health ----------------------------------------------------------------
 
 
@@ -120,33 +153,88 @@ async def chat(request: Request) -> StreamingResponse | JSONResponse:
         return JSONResponse(_build_json_result(result))
 
     async def event_stream():
-        yield _sse(
-            {"type": "thinking", "content": "Buscando datasets relevantes en datos.gov.co..."}
-        )
-        await asyncio.sleep(0.05)  # flush window so thinking arrives first
-        try:
-            result = await _run_agent_async(question)
-        except Exception as exc:  # noqa: BLE001
-            log.exception("agent run failed: %s", exc)
-            yield _sse({"type": "error", "content": f"Error interno: {exc}"})
+        from queue import Queue
+
+        from app.agents.graph import _CACHE_MAX, _question_cache, build_agent
+
+        yield _sse({"type": "thinking", "content": _STEP_LABELS["search"]})
+        await asyncio.sleep(0.05)
+
+        seen: set[str] = {"search"}  # search label already emitted above
+
+        # Cache: replay instantly
+        cached = _question_cache.get(question)
+        if cached is not None:
+            log.info("Cache hit for question: %s", question[:60])
+            for ev in _emit_result_events(cached):
+                yield ev
             yield "data: [DONE]\n\n"
             return
 
-        soql = result.get("soql") or ""
-        dataset_id = result.get("dataset_id") or ""
-        if dataset_id:
-            yield _sse({"type": "query", "content": soql, "dataset": dataset_id})
+        agent = build_agent()
+        initial_state: dict = {
+            "question": question,
+            "datasets": [],
+            "dataset_id": None,
+            "schema": None,
+            "soql": None,
+            "query_result": None,
+            "retry_count": 0,
+            "answer": None,
+            "chart": None,
+            "sources": [],
+            "step": "search",
+        }
 
-        answer = result.get("answer") or "Sin respuesta."
-        yield _sse({"type": "answer", "content": answer})
+        import threading
 
-        chart = result.get("chart")
-        if chart:
-            yield _sse({"type": "chart", "content": chart})
+        q: Queue = Queue()
+        _SENTINEL = object()
 
-        sources = result.get("sources") or []
-        yield _sse({"type": "sources", "content": sources})
+        def worker():
+            try:
+                for chunk in agent.stream(initial_state, stream_mode="updates"):
+                    q.put(chunk)
+            except Exception as exc:  # noqa: BLE001
+                q.put(exc)
+            q.put(_SENTINEL)
 
+        threading.Thread(target=worker, daemon=True).start()
+        loop = asyncio.get_event_loop()
+        final_state = None
+        while True:
+            item = await loop.run_in_executor(None, q.get)
+            if item is _SENTINEL:
+                break
+            if isinstance(item, Exception):
+                log.exception("agent stream failed: %s", item)
+                yield _sse({"type": "error", "content": f"Error interno: {item}"})
+                yield "data: [DONE]\n\n"
+                return
+            # chunk is {node_name: state}
+            for node_name, state in item.items():
+                if node_name in seen:
+                    continue
+                seen.add(node_name)
+                label = _STEP_LABELS.get(node_name)
+                if label:
+                    yield _sse({"type": "thinking", "content": label})
+                if node_name == "answer":
+                    final_state = state
+            await asyncio.sleep(0)  # yield to event loop so SSE flushes
+
+        if final_state is None:
+            yield _sse({"type": "error", "content": "El agente no completó el flujo."})
+            yield "data: [DONE]\n\n"
+            return
+
+        # Cache and emit results
+        if len(_question_cache) >= _CACHE_MAX:
+            oldest = next(iter(_question_cache))
+            del _question_cache[oldest]
+        _question_cache[question] = final_state
+        for ev in _emit_result_events(final_state):
+            yield ev
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(
@@ -179,7 +267,7 @@ def api_query(
 
     Returns the raw JSON row array from Socrata (or a 502 error envelope).
     """
-    client = SocrataClient(settings.socrata_domain, settings.socrata_app_token)
+    client = _proxy_socrata()
     try:
         rows = client.query(dataset_id, soql)
         return JSONResponse(rows)

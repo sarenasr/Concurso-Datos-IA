@@ -33,8 +33,8 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from typing import Any
 
+from app.agents.graph import _completion_kwargs, _litellm_completion
 from app.config import settings
 from app.graph.synonyms import normalize_column
 from app.socrata.client import SocrataClient
@@ -64,26 +64,11 @@ def _supabase():
 
 
 def _llm_complete(system: str, user: str) -> str:
-    """Single LLM completion via LiteLLM (provider-agnostic)."""
-    import litellm
-
-    model = settings.litellm_model
-    kwargs: dict[str, Any] = {}
-    if settings.litellm_api_base:
-        # Custom OpenAI-compatible endpoint (e.g. OpenCode Go)
-        # LiteLLM requires the "openai/" provider prefix for custom endpoints
-        if not model.startswith("openai/"):
-            model = f"openai/{model}"
-        kwargs["api_base"] = settings.litellm_api_base
-    key = settings.litellm_api_key_resolved
-    if key:
-        kwargs["api_key"] = key
-    resp = litellm.completion(
-        model=model,
-        messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-        temperature=0,
-        **kwargs,
-    )
+    """Single LLM completion via shared helper (provider-agnostic)."""
+    kw = _completion_kwargs(settings.litellm_model)
+    model = kw.pop("model")
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    resp = _litellm_completion(model=model, messages=messages, temperature=0, **kw)
     return resp["choices"][0]["message"]["content"]  # type: ignore[index]
 
 

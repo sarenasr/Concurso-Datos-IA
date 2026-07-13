@@ -3,6 +3,7 @@
 Usage:
     uv run python -m scripts.build_graph
 """
+
 from __future__ import annotations
 
 from pathlib import Path

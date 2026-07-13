@@ -27,8 +27,9 @@ REGISTRY_PATH = Path(__file__).resolve().parent.parent / "schemas" / "registry.y
 _DATE_HINTS = ("fecha", "mes", "año", "ano", "date", "vigencia")
 
 
+@lru_cache(maxsize=1)
 def _socrata() -> SocrataClient:
-    """Build a SocrataClient configured for datos.gov.co."""
+    """Build a SocrataClient configured for datos.gov.co (cached singleton)."""
     return SocrataClient(settings.socrata_domain, settings.socrata_app_token)
 
 
@@ -72,17 +73,37 @@ def search_catalog(query: str, k: int = 5) -> list[dict]:
 
 
 def get_schema(dataset_id: str) -> dict | None:
-    """Return the schema for a dataset id, from the cached registry YAML.
+    """Return the schema for a dataset id, always from the live Socrata API.
 
     Returns a dict shaped like {id, name, permalink, columns: [...]} where each
-    column is {name, field_name, datatype, description}. Returns None when the
-    id is not in the registry.
+    column is {name, field_name, datatype, description}.
+
+    Always fetches from the live API to ensure correct column names (the registry
+    YAML has encoding-corrupted field names that cause bad SoQL queries).
     """
-    registry = _load_registry()
-    for d in registry.get("datasets", []):
-        if d.get("id") == dataset_id:
-            return d
-    return None
+    try:
+        views = _socrata().get_views(dataset_id)
+        columns = []
+        for col in views.get("columns", []):
+            columns.append(
+                {
+                    "name": col.get("name", ""),
+                    "field_name": col.get("fieldName", ""),
+                    "datatype": col.get("dataTypeName", ""),
+                    "description": col.get("description", ""),
+                }
+            )
+
+        domain = settings.socrata_domain
+        return {
+            "id": dataset_id,
+            "name": views.get("name", dataset_id),
+            "permalink": f"https://{domain}/d/{dataset_id}",
+            "columns": columns,
+        }
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Failed to fetch schema from API for %s: %s", dataset_id, exc)
+        return None
 
 
 def query_dataset(dataset_id: str, soql: str) -> dict:

@@ -1,78 +1,103 @@
-"""Gemini embedding-001 embeddings via the google-genai SDK (768-dim).
+"""Embeddings via OpenRouter (OpenAI text-embedding-3-small, 768-dim).
 
-Replaces the local sentence-transformers model (1.1GB RAM) with API-based
-embeddings that are free on Gemini's generous free tier.  The model produces
-768-dim vectors via ``output_dimensionality=768``, keeping the existing
-Supabase pgvector column and ``match_catalog`` RPC compatible with no schema
-migration.
-
-Uses the ``GEMINI_API_KEY`` / ``GEMINI_API_KEYS`` env vars already configured
-in the project's ``.env`` for quota cycling across multiple free-tier keys.
+Uses OpenRouter's API with the OPENROUTER_API_KEY. The model supports
+output_dimensionality=768 via the `dimensions` parameter, matching
+our existing Supabase pgvector column and match_catalog RPC.
 """
 
 from __future__ import annotations
 
 import logging
-import random
+from functools import lru_cache
 from typing import Iterable
 
-from google import genai
-from google.genai import types
+import httpx
 
 from app.config import settings
 
 log = logging.getLogger("datia.rag.embeddings")
 
-EMBEDDING_MODEL = "gemini-embedding-001"
-EMBEDDING_DIM = 768
-BATCH_SIZE = 100
+EMBEDDING_MODEL = "google/gemini-embedding-2"
+EMBEDDING_DIM = 1024
+BATCH_SIZE = 96
+OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 
 
 class EmbeddingError(Exception):
-    """Raised when an embedding API call fails with no recovery path."""
+    pass
 
 
-def _get_client() -> genai.Client:
-    """Build a google-genai Client with a random key from the pool."""
-    keys = settings.gemini_keys_list
-    if not keys:
-        raise EmbeddingError(
-            "No GEMINI_API_KEY or GEMINI_API_KEYS configured. Set one in .env to enable embeddings."
-        )
-    api_key = random.choice(keys)
-    return genai.Client(api_key=api_key)
+def _get_api_key() -> str:
+    key = settings.openrouter_api_key
+    if not key:
+        raise EmbeddingError("OPENROUTER_API_KEY not configured")
+    return key
+
+
+@lru_cache(maxsize=1)
+def _client() -> httpx.Client:
+    """Return a shared, long-lived httpx client for embedding requests."""
+    return httpx.Client(timeout=60.0)
 
 
 def embed_texts(texts: Iterable[str]) -> list[list[float]]:
-    """Embed an iterable of strings (768-dim) via Gemini's embedding API.
+    """Embed an iterable of strings (768-dim) via OpenRouter.
 
-    Batches at ``BATCH_SIZE``.  Returns a list aligned 1:1 with the input
-    order.  Raises ``EmbeddingError`` if the API call fails.
+    Batches at BATCH_SIZE. Returns a list aligned 1:1 with input order.
     """
     texts = list(texts)
     if not texts:
         return []
 
-    client = _get_client()
-    config = types.EmbedContentConfig(output_dimensionality=EMBEDDING_DIM)
+    key = _get_api_key()
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+    client = _client()
     out: list[list[float]] = []
 
     for i in range(0, len(texts), BATCH_SIZE):
         chunk = texts[i : i + BATCH_SIZE]
-        try:
-            resp = client.models.embed_content(
-                model=EMBEDDING_MODEL,
-                contents=chunk,
-                config=config,
-            )
-            out.extend([list(e.values) for e in resp.embeddings])
-        except Exception as exc:
-            log.error("gemini embed_content failed (batch %d): %s", i, exc)
-            raise EmbeddingError(f"Embedding API call failed: {exc}") from exc
+
+        # Truncate texts to fit OpenAI's 8192 token limit (~6000 chars)
+        chunk = [t[:6000] if len(t) > 6000 else t for t in chunk]
+
+        # Retry with exponential backoff for rate limits
+        for attempt in range(5):
+            try:
+                resp = client.post(
+                    f"{OPENROUTER_BASE}/embeddings",
+                    headers=headers,
+                    json={
+                        "model": EMBEDDING_MODEL,
+                        "input": chunk,
+                        "dimensions": EMBEDDING_DIM,
+                    },
+                    timeout=60.0,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+
+                if "data" not in data:
+                    raise ValueError(f"Unexpected response format: {data}")
+
+                out.extend([list(e["embedding"]) for e in data["data"]])
+                break  # Success, exit retry loop
+
+            except (httpx.HTTPStatusError, ValueError) as e:
+                if attempt == 4:  # Last attempt
+                    raise
+                wait_time = 2**attempt  # 1, 2, 4, 8, 16 seconds
+                print(f"  Retry {attempt + 1}/5 after {wait_time}s: {e}", flush=True)
+                import time
+
+                time.sleep(wait_time)
 
     return out
 
 
+@lru_cache(maxsize=512)
 def embed_text(text: str) -> list[float]:
-    """Convenience: embed a single string."""
+    """Convenience: embed a single string (cached)."""
     return embed_texts([text])[0]

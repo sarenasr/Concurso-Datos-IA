@@ -7,6 +7,7 @@ and distinct-value sampling (used to validate proposed graph JOIN edges).
 from __future__ import annotations
 
 from typing import Iterator
+from urllib.parse import parse_qsl
 
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
@@ -137,19 +138,11 @@ class SocrataClient:
         `$select=...&$where=...&$group=...&$limit=...`. It is appended to
         `/resource/{id}.json` as URL params.
         """
-        # soql already starts with "$..." params; strip a leading '?' if present
         path = f"/resource/{id}.json"
         params: dict = {}
         if soql:
             frag = soql.lstrip("?")
-            for pair in frag.split("&"):
-                if not pair:
-                    continue
-                if "=" in pair:
-                    key, val = pair.split("=", 1)
-                    params[key] = val
-                else:
-                    params[pair] = ""
+            params = dict(parse_qsl(frag, keep_blank_values=True))
         return self._get(path, params=params)  # type: ignore[return-value]
 
     def distinct_values(self, id: str, field: str, limit: int = 50) -> list:

@@ -1,40 +1,43 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import vegaEmbed from "vega-embed";
-import { AlertCircle, Table2 } from "lucide-react";
+import { AlertCircle, Table2, Loader2 } from "lucide-react";
 
 export function VegaChart({ spec }: { spec: Record<string, unknown> }) {
   const ref = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!ref.current) return;
     setError(null);
+    setLoading(true);
 
     const result = vegaEmbed(ref.current, spec as never, {
       actions: false,
       renderer: "svg",
     });
 
-    result.catch((err: unknown) => {
-      const message =
-        err instanceof Error ? err.message : "Error al renderizar el gráfico";
-      setError(message);
-    });
+    result
+      .then(() => setLoading(false))
+      .catch((err: unknown) => {
+        const message =
+          err instanceof Error ? err.message : "Error al renderizar el gráfico";
+        setError(message);
+        setLoading(false);
+      });
 
     return () => {
       result.then((r) => r.finalize()).catch(() => {});
     };
   }, [spec]);
 
-  // Extract data for table fallback
-  const dataValues = extractDataForTable(spec);
+  const dataValues = useMemo(() => extractDataForTable(spec), [spec]);
 
   return (
     <div className="mt-3 rounded-xl border border-border/60 bg-card p-4 shadow-sm">
       {error ? (
-        /* Table fallback when chart fails */
         <div className="space-y-3">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Table2 className="h-4 w-4" />
@@ -84,15 +87,20 @@ export function VegaChart({ spec }: { spec: Record<string, unknown> }) {
           )}
         </div>
       ) : (
-        <div ref={ref} className="w-full overflow-x-auto" />
+        <div className="w-full overflow-x-auto">
+          {loading && (
+            <div className="flex items-center gap-2 py-6 text-xs text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span>Renderizando gráfico…</span>
+            </div>
+          )}
+          <div ref={ref} className={loading ? "hidden" : "w-full overflow-x-auto"} />
+        </div>
       )}
     </div>
   );
 }
 
-/**
- * Extracts data values from a Vega-Lite spec for table fallback.
- */
 function extractDataForTable(spec: Record<string, unknown>): Record<string, unknown>[] {
   const data = spec.data as Record<string, unknown> | undefined;
   if (!data) return [];

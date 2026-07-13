@@ -4,6 +4,7 @@ Usage:
     uv run python -m scripts.ingest_catalog            # full catalog
     uv run python -m scripts.ingest_catalog --limit 500 # sample
 """
+
 from __future__ import annotations
 
 import argparse

@@ -1,13 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { memo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import type { Source } from "@/lib/api";
 import { extractDatasetId, soqlPermalink } from "@/lib/api";
 import { ExternalLink, Database, ChevronDown, ChevronRight, Code2 } from "lucide-react";
 
-export function SourcesCard({ sources }: { sources: Source[] }) {
+export const SourcesCard = memo(function SourcesCard({ sources }: { sources: Source[] }) {
   if (!sources || sources.length === 0) return null;
   return (
     <div className="mt-4">
@@ -21,9 +21,9 @@ export function SourcesCard({ sources }: { sources: Source[] }) {
       </div>
     </div>
   );
-}
+});
 
-function SourceItem({ source, index }: { source: Source; index: number }) {
+const SourceItem = memo(function SourceItem({ source, index }: { source: Source; index: number }) {
   const [soqlOpen, setSoqlOpen] = useState(false);
   const datasetId = extractDatasetId(source.permalink);
 
@@ -87,4 +87,4 @@ function SourceItem({ source, index }: { source: Source; index: number }) {
       </CardContent>
     </Card>
   );
-}
+});

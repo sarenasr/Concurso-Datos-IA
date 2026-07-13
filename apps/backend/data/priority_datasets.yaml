@@ -43,9 +43,9 @@ priority_datasets:
   name: Registro Único de Víctimas
   search_hint: registro unico de victimas
   sector: Inclusión Social
-- id: epzt-64uw
-  name: Población DANE por municipio
-  search_hint: dane poblacion municipio proyeccion
+- id: 5wbm-t4vj
+  name: Población Censo Nacional 2018 DANE
+  search_hint: dane poblacion municipio censo habitantes proyeccion
   sector: Población
 - id: emp6-672w
   name: División territorial DANE

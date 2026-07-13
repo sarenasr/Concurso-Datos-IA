@@ -1,5 +1,6 @@
-export const BACKEND_URL =
-  process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
+// When NEXT_PUBLIC_BACKEND_URL is set (prod or explicit override), use it directly.
+// Otherwise, route through the /proxy rewrite defined in next.config.ts (dev default).
+export const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "/proxy";
 
 export type Source = {
   name: string;
@@ -40,7 +41,12 @@ export async function streamChat(
   }
 
   if (!res.ok || !res.body) {
-    throw new Error(`Error del servidor: ${res.status}`);
+    const detail = await res.text().catch(() => "");
+    throw new Error(
+      detail
+        ? `Error del servidor (${res.status}): ${detail.slice(0, 300)}`
+        : `Error del servidor: ${res.status}`
+    );
   }
 
   const reader = res.body.getReader();
@@ -58,7 +64,6 @@ export async function streamChat(
     }
   }
 
-  // Process any remaining buffer after stream ends
   if (buffer.trim()) {
     parseSSEChunk(buffer, onEvent);
   }
