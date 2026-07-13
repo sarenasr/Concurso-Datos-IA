@@ -95,17 +95,17 @@ def _openrouter_fallback_kwargs(model_name: str) -> dict[str, Any]:
 
 
 def _call_with_fallback(model_setting: str, messages: list[dict], temperature: float) -> str:
-    """Try primary provider, fall back to OpenRouter if it fails."""
-    kw = _completion_kwargs(model_setting)
-    model = kw.pop("model")
+    """Try OpenRouter first, fall back to OpenCode Go if it fails."""
+    fw = _openrouter_fallback_kwargs(model_setting)
+    model = fw.pop("model")
     try:
-        resp = _litellm_completion(model=model, messages=messages, temperature=temperature, **kw)
+        resp = _litellm_completion(model=model, messages=messages, temperature=temperature, **fw)
         return resp["choices"][0]["message"]["content"]  # type: ignore[index]
     except Exception as exc:
-        log.warning("Primary LLM provider failed: %s — falling back to OpenRouter", exc)
-        fw = _openrouter_fallback_kwargs(model_setting)
-        model_fb = fw.pop("model")
-        resp = _litellm_completion(model=model_fb, messages=messages, temperature=temperature, **fw)
+        log.warning("OpenRouter failed: %s — falling back to OpenCode Go", exc)
+        kw = _completion_kwargs(model_setting)
+        model = kw.pop("model")
+        resp = _litellm_completion(model=model, messages=messages, temperature=temperature, **kw)
         return resp["choices"][0]["message"]["content"]  # type: ignore[index]
 
 
