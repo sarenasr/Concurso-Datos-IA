@@ -1,8 +1,8 @@
-"""Embeddings via OpenRouter (OpenAI text-embedding-3-small, 768-dim).
+"""Embeddings via OpenRouter using the OpenAI Python client.
 
-Uses OpenRouter's API with the OPENROUTER_API_KEY. The model supports
-output_dimensionality=768 via the `dimensions` parameter, matching
-our existing Supabase pgvector column and match_catalog RPC.
+Uses the official OpenAI client pointed at OpenRouter's API base to
+generate embeddings via google/gemini-embedding-2 (1024-dim).
+Supports batching with retry/backoff for rate limits.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import logging
 from functools import lru_cache
 from typing import Iterable
 
-import httpx
+from openai import OpenAI
 
 from app.config import settings
 
@@ -27,21 +27,20 @@ class EmbeddingError(Exception):
     pass
 
 
-def _get_api_key() -> str:
+@lru_cache(maxsize=1)
+def _client() -> OpenAI:
+    """Return a shared OpenAI client pointed at OpenRouter."""
     key = settings.openrouter_api_key
     if not key:
         raise EmbeddingError("OPENROUTER_API_KEY not configured")
-    return key
-
-
-@lru_cache(maxsize=1)
-def _client() -> httpx.Client:
-    """Return a shared, long-lived httpx client for embedding requests."""
-    return httpx.Client(timeout=60.0)
+    return OpenAI(
+        base_url=OPENROUTER_BASE,
+        api_key=key,
+    )
 
 
 def embed_texts(texts: Iterable[str]) -> list[list[float]]:
-    """Embed an iterable of strings (768-dim) via OpenRouter.
+    """Embed strings (1024-dim) via OpenRouter + OpenAI client.
 
     Batches at BATCH_SIZE. Returns a list aligned 1:1 with input order.
     """
@@ -49,50 +48,36 @@ def embed_texts(texts: Iterable[str]) -> list[list[float]]:
     if not texts:
         return []
 
-    key = _get_api_key()
-    headers = {
-        "Authorization": f"Bearer {key}",
-        "Content-Type": "application/json",
-    }
     client = _client()
     out: list[list[float]] = []
 
     for i in range(0, len(texts), BATCH_SIZE):
         chunk = texts[i : i + BATCH_SIZE]
-
-        # Truncate texts to fit OpenAI's 8192 token limit (~6000 chars)
         chunk = [t[:6000] if len(t) > 6000 else t for t in chunk]
 
-        # Retry with exponential backoff for rate limits
         for attempt in range(5):
             try:
-                resp = client.post(
-                    f"{OPENROUTER_BASE}/embeddings",
-                    headers=headers,
-                    json={
-                        "model": EMBEDDING_MODEL,
-                        "input": chunk,
-                        "dimensions": EMBEDDING_DIM,
+                resp = client.embeddings.create(
+                    model=EMBEDDING_MODEL,
+                    input=chunk,
+                    dimensions=EMBEDDING_DIM,
+                    encoding_format="float",
+                    extra_headers={
+                        "HTTP-Referer": "https://concurso-datos-ia.vercel.app",
+                        "X-OpenRouter-Title": "DATIA - Asistente IA Datos Colombia",
                     },
-                    timeout=60.0,
                 )
-                resp.raise_for_status()
-                data = resp.json()
+                out.extend([e.embedding for e in resp.data])
+                break
 
-                if "data" not in data:
-                    raise ValueError(f"Unexpected response format: {data}")
-
-                out.extend([list(e["embedding"]) for e in data["data"]])
-                break  # Success, exit retry loop
-
-            except (httpx.HTTPStatusError, ValueError) as e:
-                if attempt == 4:  # Last attempt
+            except Exception as e:
+                if attempt == 4:
                     raise
-                wait_time = 2**attempt  # 1, 2, 4, 8, 16 seconds
-                print(f"  Retry {attempt + 1}/5 after {wait_time}s: {e}", flush=True)
+                wait = 2**attempt
+                print(f"  Retry {attempt + 1}/5 after {wait}s: {e}", flush=True)
                 import time
 
-                time.sleep(wait_time)
+                time.sleep(wait)
 
     return out
 
