@@ -34,7 +34,7 @@ from __future__ import annotations
 import json
 from collections import defaultdict
 
-from app.agents.graph import _completion_kwargs, _litellm_completion
+from app.agents.graph import _call_with_fallback
 from app.config import settings
 from app.graph.synonyms import normalize_column
 from app.socrata.client import SocrataClient
@@ -64,12 +64,9 @@ def _supabase():
 
 
 def _llm_complete(system: str, user: str) -> str:
-    """Single LLM completion via shared helper (provider-agnostic)."""
-    kw = _completion_kwargs(settings.litellm_model)
-    model = kw.pop("model")
+    """Single LLM completion via shared helper (provider-agnostic with fallback)."""
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-    resp = _litellm_completion(model=model, messages=messages, temperature=0, **kw)
-    return resp["choices"][0]["message"]["content"]  # type: ignore[index]
+    return _call_with_fallback(settings.litellm_model, messages, temperature=0)
 
 
 def _classify_columns(dataset_id: str, columns: list[str]) -> dict[str, str]:
