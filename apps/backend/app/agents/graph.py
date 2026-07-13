@@ -78,13 +78,10 @@ def _litellm_completion(model: str, **kwargs) -> Any:
     return litellm.completion(model=model, **kwargs)
 
 
-def _openrouter_fallback_kwargs(model_name: str) -> dict[str, Any]:
-    """Build LiteLLM kwargs for a direct OpenRouter call.
-
-    Used as a fallback when the primary provider (OpenCode Go) is unreachable.
-    """
+def _openrouter_kwargs(model_name: str) -> dict[str, Any]:
+    """Build LiteLLM kwargs for a direct OpenRouter call."""
     if not settings.openrouter_api_key:
-        raise RuntimeError("No OpenRouter API key configured for fallback")
+        raise RuntimeError("No OpenRouter API key configured")
     model = f"openrouter/{model_name}" if not model_name.startswith("openrouter/") else model_name
     return {
         "model": model,
@@ -95,18 +92,21 @@ def _openrouter_fallback_kwargs(model_name: str) -> dict[str, Any]:
 
 
 def _call_with_fallback(model_setting: str, messages: list[dict], temperature: float) -> str:
-    """Try OpenRouter first, fall back to OpenCode Go if it fails."""
-    fw = _openrouter_fallback_kwargs(model_setting)
-    model = fw.pop("model")
-    try:
-        resp = _litellm_completion(model=model, messages=messages, temperature=temperature, **fw)
-        return resp["choices"][0]["message"]["content"]  # type: ignore[index]
-    except Exception as exc:
-        log.warning("OpenRouter failed: %s — falling back to OpenCode Go", exc)
-        kw = _completion_kwargs(model_setting)
-        model = kw.pop("model")
-        resp = _litellm_completion(model=model, messages=messages, temperature=temperature, **kw)
-        return resp["choices"][0]["message"]["content"]  # type: ignore[index]
+    """Try OpenRouter first, fall back to OpenCode Go on failure."""
+    if settings.openrouter_api_key:
+        fw = _openrouter_kwargs(model_setting)
+        model_fb = fw.pop("model")
+        try:
+            resp = _litellm_completion(
+                model=model_fb, messages=messages, temperature=temperature, **fw
+            )
+            return resp["choices"][0]["message"]["content"]  # type: ignore[index]
+        except Exception as exc:
+            log.warning("OpenRouter failed: %s — falling back to OpenCode Go", exc)
+    kw = _completion_kwargs(model_setting)
+    model = kw.pop("model")
+    resp = _litellm_completion(model=model, messages=messages, temperature=temperature, **kw)
+    return resp["choices"][0]["message"]["content"]  # type: ignore[index]
 
 
 def llm_complete(messages: list[dict], temperature: float = 0) -> str:
