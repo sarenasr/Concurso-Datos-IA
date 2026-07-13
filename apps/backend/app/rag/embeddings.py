@@ -62,10 +62,16 @@ def embed_texts(texts: Iterable[str]) -> list[list[float]]:
                     input=chunk,
                     dimensions=EMBEDDING_DIM,
                     encoding_format="float",
-                    #extra_headers={
-                    #    "HTTP-Referer": "https://concurso-datos-ia.vercel.app",
-                    #    "X-OpenRouter-Title": "DATIA - Asistente IA Datos Colombia",
-                    #},
+                    extra_headers={
+                        "HTTP-Referer": "https://concurso-datos-ia.vercel.app",
+                        "X-OpenRouter-Title": "DATIA - Asistente IA Datos Colombia",
+                    },
+                    extra_body={
+                        "provider": {
+                            "order": ["Google"],
+                            "allow_fallbacks": True,
+                        }
+                    },
                 )
                 out.extend([e.embedding for e in resp.data])
                 break
