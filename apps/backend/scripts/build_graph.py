@@ -22,7 +22,7 @@ def main() -> None:
     # only build for resolved (non-TODO) ids
     dataset_ids = [e["id"] for e in entries if e.get("id") and e["id"] != "TODO"]
     if not dataset_ids:
-        print("no resolved dataset ids to build; run pull_schemas first")
+        print("no resolved dataset ids to build; check data/priority_datasets.yaml")
         return
     print(f"building graph for {len(dataset_ids)} datasets")
     report = build_graph(dataset_ids)

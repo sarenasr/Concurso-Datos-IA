@@ -10,3 +10,9 @@ dist/
 .vscode/
 .idea/
 *.log
+
+# Eval run artifacts
+apps/backend/data/eval_retrieval_*.json
+.docs/superpowers/plans/
+docs/superpowers/plans/
+.superpowers/

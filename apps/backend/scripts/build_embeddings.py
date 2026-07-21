@@ -1,7 +1,8 @@
 """CLI: embed catalog rows that are missing vectors.
 
-Reads all rows from `catalog`, builds a doc string per dataset, embeds with Gemini
-text-embedding-004, and upserts into `catalog_embeddings`.
+Reads all rows from `catalog`, builds a doc string per dataset, embeds with Google
+`gemini-embedding-2` (1024-dim) via OpenRouter (see `app/rag/embeddings.py`), and
+upserts into `catalog_embeddings`.
 
 Usage:
     uv run python -m scripts.build_embeddings

@@ -180,6 +180,15 @@ h2 {
   animation: manglar-isotipo-pulse 1.6s ease-in-out infinite;
 }
 
+/* Loading mangrove: animated webp by default; the static isotipo replaces it
+   for users who prefer reduced motion. */
+.manglar-loading-static {
+  display: none;
+}
+.manglar-loading-anim {
+  display: block;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .manglar-bubble-pulse,
   .manglar-panel-enter,
@@ -188,5 +197,11 @@ h2 {
   }
   .manglar-isotipo-pulse {
     opacity: 1;
+  }
+  .manglar-loading-anim {
+    display: none;
+  }
+  .manglar-loading-static {
+    display: block;
   }
 }

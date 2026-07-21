@@ -11,10 +11,10 @@ hero_questions:
     answer_shape: number
   - id: 3
     question: "¿Empresas sancionadas que además tienen contratos en salud en Antioquia?"
-    datasets: ["secop-sancionados-id-todo", "jbjy-vk9h"]   # cross-sector via NIT
+    datasets: ["4n4q-k399", "jbjy-vk9h"]   # cross-sector via NIT
     pattern: graph_join
     answer_shape: table
-    note: secop-sancionados id to be resolved by pull_schemas.py
+    # join key: documento_contratista (on 4n4q-k399)
   - id: 4
     question: "¿Cuál fue la TRM promedio del último mes comparada con el año anterior?"
     datasets: ["mcec-87by"]
@@ -30,6 +30,7 @@ hero_questions:
     datasets: ["jbjy-vk9h"]
     pattern: claim_checker
     answer_shape: verdict_verde_amarillo_rojo + citations
+    expect_refusal: true   # claim_checker no está implementado; hoy la conducta correcta es la negación honesta. Si se implementa claim_checker, quitar este flag.
   - id: 7
     question: "¿Qué hay de Antioquia en datos?"
     datasets: []
@@ -40,6 +41,7 @@ hero_questions:
     datasets: []
     pattern: multi_dataset_story
     answer_shape: markdown_story + charts
+    expect_refusal: true   # no existe un dataset preciso de déficit de vivienda en el catálogo; la conducta correcta es la negación honesta.
   - id: 9
     question: "¿Cuántos medicamentos vigentes hay registrados y cuántos son del grupo cardiovasculares?"
     datasets: ["i7cb-raxc"]

@@ -41,6 +41,12 @@ log = logging.getLogger("manglar.agent")
 MAX_RETRIES = 2
 _SOQL_HARD_LIMIT = 50000
 
+# search_catalog() scores are fused RRF + priority-boost values on a SMALL
+# scale — a strong/relevant top match is only ~0.045-0.05, and typical scores
+# range ~0.02-0.05. They are NOT 0-1 similarity scores; never gate on 0.5.
+_PRIORITY_OVERRIDE_MAX_SCORE = 0.03  # only override when the top hit is genuinely weak
+_MIN_CONFIDENT_SCORE = 0.02  # below this, refuse to commit so answer_node's honest fallback fires
+
 _HERO_YAML = Path(__file__).resolve().parent.parent.parent / "data" / "hero_questions.yaml"
 
 
@@ -68,7 +74,14 @@ ANSWER_SYSTEM_PROMPT = (
     "Eres Manglar, un asistente que explica datos de Colombia en español claro y simple.\n"
     "Recibes una pregunta, el resultado de una consulta SoQL, y los metadatos del dataset.\n"
     "Respondes en español, en máximo 3 párrafos, con el dato principal primero.\n"
-    "Menciona el dataset por nombre e incluye el número exacto si aplica."
+    "Menciona el dataset por nombre e incluye el número exacto si aplica.\n"
+    "REGLA CRÍTICA: si el dataset NO trata sobre el tema exacto de la pregunta "
+    "(por ejemplo, te dan datos de COVID-19 pero preguntan por dengue), NO reportes "
+    "ninguna cifra de ese dataset. En su lugar responde exactamente que no encontraste "
+    "un dataset preciso para esa pregunta y sugiere consultar la fuente oficial. "
+    "Nunca presentes un número de un tema distinto como si respondiera la pregunta.\n"
+    "Cuando compares periodos o reportes un promedio, total o variación, incluye SIEMPRE "
+    "los valores numéricos exactos en la respuesta (no describas solo la tendencia)."
 )
 
 JOIN_ANSWER_SYSTEM_PROMPT = (
@@ -81,6 +94,19 @@ JOIN_ANSWER_SYSTEM_PROMPT = (
     "Menciona AMBOS datasets por nombre en la respuesta (primario y secundario).\n"
     "Si el campo 'partial' es true, indica que el resultado es parcial y que los números "
     "pueden estar subestimados."
+)
+
+RELEVANCE_GATE_SYSTEM_PROMPT = (
+    "Eres un verificador de relevancia para un asistente de datos abiertos de Colombia.\n"
+    "Recibes una pregunta del usuario y los metadatos (nombre + columnas) de UN dataset "
+    "candidato que un buscador eligió.\n"
+    "Tu única tarea: decidir si ese dataset REALMENTE contiene los datos necesarios para "
+    "responder la pregunta, sobre el MISMO tema.\n"
+    "Un dataset de un tema distinto NO sirve aunque se parezca (p. ej. preguntan por dengue "
+    "y el dataset es de COVID-19; preguntan por hurtos y el dataset es de homicidios).\n"
+    'Responde SOLO con JSON válido, sin markdown: {"relevant": true|false, "reason": "..."}.\n'
+    "Sé conservador: si hay duda razonable de que el dataset SÍ cubre el tema, responde "
+    "true. Responde false solo cuando el dataset trate claramente de otro tema."
 )
 
 JOIN_SYSTEM_PROMPT = (
@@ -188,6 +214,21 @@ def _clean_soql(raw: str) -> str:
         soql = "\n".join(soql.splitlines()[1:])
         soql = soql.rsplit("```", 1)[0]
     return soql.strip().strip("`").strip()
+
+
+def _looks_like_soql(soql: str) -> bool:
+    """True if the string contains at least one Socrata SoQL parameter token.
+
+    The SoQL generator LLM occasionally returns prose (a clarifying question)
+    or plain SQL (``SELECT ... FROM``) instead of the ``$select/$where/...``
+    query string Socrata expects. Neither contains a ``$``-prefixed SoQL
+    parameter, so a token check cheaply rejects both before they reach the API.
+    """
+    if not soql:
+        return False
+    tokens = ("$select", "$where", "$group", "$order", "$limit", "$offset", "$q", "$having", "$query")
+    lowered = soql.lower()
+    return any(t in lowered for t in tokens)
 
 
 _JOIN_QUESTION_RE = re.compile(
@@ -344,9 +385,15 @@ def search_node(state: AgentState) -> AgentState:
     """Find candidate datasets via catalog RAG and pick the best one.
 
     Selection order:
-    1. **Priority override** — if the top result's score is below 0.5 AND the
-       question keyword-matches a priority dataset, override with that match.
-    2. **Default** — pick the highest-scored result from RAG.
+    1. **Priority override** — if the top result's score is below
+       ``_PRIORITY_OVERRIDE_MAX_SCORE`` AND the question keyword-matches a
+       priority dataset, override with that match.
+    2. **Low-confidence fallback** — if there was no priority override and the
+       top score is below ``_MIN_CONFIDENT_SCORE`` (and this isn't a join
+       question), leave ``dataset_id`` unset so ``answer_node`` gives an
+       honest "no relevant dataset found" answer instead of querying a weak
+       match.
+    3. **Default** — otherwise pick the highest-scored result from RAG.
 
     When the question looks like a cross-dataset join, the node also resolves
     the partner dataset (SECOP pair via priority YAML, or graph neighbors).
@@ -364,7 +411,8 @@ def search_node(state: AgentState) -> AgentState:
     chosen_score = float(best.get("score", 0.0))
 
     # Priority override: if top score is low, check keyword matches
-    if chosen_score < 0.5:
+    priority_match = None
+    if chosen_score < _PRIORITY_OVERRIDE_MAX_SCORE:
         priority_match = _find_priority_keyword_override(state["question"], results)
         if priority_match:
             log.info(
@@ -375,11 +423,24 @@ def search_node(state: AgentState) -> AgentState:
             )
             chosen_id = priority_match
 
-    if not state.get("dataset_id"):
-        state["dataset_id"] = chosen_id
-
-    # Join detection
+    # Join detection — computed before the low-confidence check below so a
+    # weak-scoring join question never gets its dataset_id cleared here (the
+    # join path resolves/consumes dataset_id independently, further down).
     state["is_join_question"] = _detect_join_question(state["question"])
+
+    if not state.get("dataset_id"):
+        if (
+            priority_match is None
+            and chosen_score < _MIN_CONFIDENT_SCORE
+            and not state["is_join_question"]
+        ):
+            # Honest low-confidence fallback: refuse to commit to a weak match.
+            # answer_node's `dataset_id is None` branch will suggest alternatives
+            # from `state["datasets"]` instead of querying an irrelevant dataset.
+            state["dataset_id"] = None
+        else:
+            state["dataset_id"] = chosen_id
+
     if state["is_join_question"]:
         pair = _resolve_secop_pair(state["question"])
         if pair:
@@ -425,6 +486,53 @@ def schema_node(state: AgentState) -> AgentState:
     did = state.get("dataset_id")
     state["schema"] = T.get_schema(did) if did else None
     state["step"] = "schema"
+    return state
+
+
+def relevance_gate_node(state: AgentState) -> AgentState:
+    """Reject a chosen dataset whose subject doesn't match the question.
+
+    The score-based selection in ``search_node`` catches "nothing is even
+    weakly similar", but not "the top match is about a *different subject*
+    than asked" — a topically-adjacent dataset (COVID for a dengue question,
+    homicidios for a hurtos question) sails past the score floor. This node
+    asks a small LLM whether the chosen dataset actually contains data for the
+    question's subject; on a confident "no" it clears ``dataset_id`` so the
+    downstream honest fallback fires instead of reporting a cross-topic number.
+
+    Conservative by design: any LLM/parse failure, or genuine doubt, leaves the
+    dataset in place — we never want to wrongly refuse a valid data question.
+    """
+    did = state.get("dataset_id")
+    schema = state.get("schema")
+    state["step"] = "relevance_gate"
+    if not did or not schema:
+        return state
+
+    col_text = _column_brief(schema, max_cols=15)
+    user_content = (
+        f"Pregunta: {state['question']}\n"
+        f"Dataset candidato: {schema.get('name', did)}\n"
+        f"Columnas:\n{col_text}"
+    )
+    messages = [
+        {"role": "system", "content": RELEVANCE_GATE_SYSTEM_PROMPT},
+        {"role": "user", "content": user_content},
+    ]
+    try:
+        parsed = _parse_join_llm_response(llm_complete_small(messages, temperature=0))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("relevance_gate LLM call failed, keeping dataset: %s", exc)
+        return state
+
+    if parsed and parsed.get("relevant") is False:
+        log.info(
+            "Relevance gate rejected %s for question %r: %s",
+            did,
+            state["question"][:80],
+            parsed.get("reason", ""),
+        )
+        state["dataset_id"] = None
     return state
 
 
@@ -499,6 +607,10 @@ def generate_soql_node(state: AgentState) -> AgentState:
         soql = _clean_soql(llm_complete_small(messages, temperature=0))
     except Exception as exc:  # noqa: BLE001
         log.exception("generate_soql LLM call failed: %s", exc)
+        soql = ""
+
+    if soql and not _looks_like_soql(soql):
+        log.warning("generate_soql produced a non-SoQL response, discarding: %r", soql[:200])
         soql = ""
     state["soql"] = soql
     state["step"] = "generate_soql"
@@ -1078,6 +1190,7 @@ def build_agent():
     g.add_node("chitchat_answer", chitchat_answer_node)
     g.add_node("search", search_node)
     g.add_node("schema", schema_node)
+    g.add_node("relevance_gate", relevance_gate_node)
     g.add_node("generate_soql", generate_soql_node)
     g.add_node("execute_query", execute_query_node)
     g.add_node("check_result", check_result_node)
@@ -1098,7 +1211,8 @@ def build_agent():
         route_after_search,
         {"schema": "schema", "join_generate": "join_generate"},
     )
-    g.add_edge("schema", "generate_soql")
+    g.add_edge("schema", "relevance_gate")
+    g.add_edge("relevance_gate", "generate_soql")
     g.add_edge("generate_soql", "execute_query")
     g.add_edge("execute_query", "check_result")
     g.add_conditional_edges(

@@ -48,15 +48,15 @@ export function ManglarBubble() {
           }
         >
           <div className="flex shrink-0 items-center gap-3 border-b border-white/10 bg-manglar-raiz px-4 py-3">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src="/brand/manglar-isotipo.png"
-              alt=""
-              width={28}
-              height={28}
-              style={{ filter: "invert(1)" }}
-              className="shrink-0"
-            />
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white shadow-sm">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src="/brand/manglar-isotipo.png"
+                alt=""
+                width={24}
+                height={24}
+              />
+            </span>
             <div className="flex flex-1 flex-col">
               <span className="text-sm font-bold leading-tight text-white">
                 Manglar
@@ -116,10 +116,8 @@ export function ManglarBubble() {
           setShowWelcome(false);
           setOpen((v) => !v);
         }}
-        className={`manglar-bubble-pulse flex h-16 w-16 items-center justify-center rounded-full border-4 border-white transition-all duration-200 hover:scale-105 active:scale-95 ${
-          open
-            ? "manglar-bubble-idle bg-white shadow-lg shadow-black/20 text-manglar-raiz"
-            : "bg-manglar-raiz text-white"
+        className={`manglar-bubble-pulse flex h-16 w-16 items-center justify-center rounded-full border border-border bg-white text-manglar-raiz shadow-lg shadow-black/20 transition-all duration-200 hover:scale-105 active:scale-95 ${
+          open ? "manglar-bubble-idle" : ""
         }`}
         aria-label={open ? "Cerrar chat Manglar" : "Abrir chat Manglar"}
       >
@@ -130,9 +128,8 @@ export function ManglarBubble() {
           <img
             src="/brand/manglar-isotipo.png"
             alt="Manglar"
-            width={34}
-            height={34}
-            style={{ filter: "invert(1)" }}
+            width={38}
+            height={38}
           />
         )}
       </button>

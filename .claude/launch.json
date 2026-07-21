@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "manglar-frontend",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--dir", "apps/frontend", "dev"],
+      "port": 3000,
+      "autoPort": true
+    }
+  ]
+}

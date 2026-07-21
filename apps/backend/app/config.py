@@ -3,6 +3,7 @@
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -49,6 +50,26 @@ class Settings(BaseSettings):
 
     # Misc
     log_level: str = "INFO"
+    numpy_fallback: bool = False
+    enable_reranker: bool = True
+    # LLM latency budget (interactive latency guard against slow/flaky providers)
+    llm_timeout_s: float = 15.0
+    llm_max_attempts: int = 2
+    llm_backoff_max_s: float = 2.0
+    # Reranker latency budget
+    rerank_timeout_s: float = 8.0
+    rerank_max_candidates: int = 8
+    cors_origins: list[str] = [
+        "http://localhost:3000",
+        "https://concurso-datos-ia.vercel.app",
+    ]
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def _split_cors_origins(cls, v):
+        if isinstance(v, str):
+            return [s.strip() for s in v.split(",") if s.strip()]
+        return v
 
     @property
     def litellm_api_key_resolved(self) -> str:
