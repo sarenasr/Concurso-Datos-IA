@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv sync
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run pytest -v
+      - name: Syntax sanity
+        run: python -m py_compile app/config.py && python -m py_compile app/main.py
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v3
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: apps/frontend/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm build
+
+  migrations:
+    runs-on: ubuntu-latest
+    needs: []
+    env:
+      DATABASE_URL: postgresql://manglar:manglar@localhost:5432/manglar_test
+    services:
+      pgvector:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: manglar
+          POSTGRES_PASSWORD: manglar
+          POSTGRES_DB: manglar_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U manglar -d manglar_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install psql
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: Apply migrations
+        run: |
+          for f in $(ls infra/supabase/migrations/*.sql | sort); do
+            echo "Applying $f"
+            psql "$DATABASE_URL" -f "$f"
+          done
+      - name: Sanity inserts
+        run: |
+          psql "$DATABASE_URL" -c "
+            INSERT INTO catalog (id, name, type, domain_category)
+            VALUES ('test-dataset', 'Test Dataset', 'dataset', 'test');
+          "
+          ZERO_VEC=$(printf '[%.0s0,' {1..1023})
+          ZERO_VEC="${ZERO_VEC}0]"
+          psql "$DATABASE_URL" -c "
+            INSERT INTO catalog_embeddings (dataset_id, embedding)
+            VALUES ('test-dataset', '${ZERO_VEC}'::vector);
+          "
+          COUNT=$(psql "$DATABASE_URL" -tAc "SELECT COUNT(*) FROM catalog_embeddings;")
+          echo "catalog_embeddings count: $COUNT"
+          test "$COUNT" -ge 1
+      - name: Test match_catalog RPC
+        run: |
+          ZERO_VEC=$(printf '[%.0s0,' {1..1023})
+          ZERO_VEC="${ZERO_VEC}0]"
+          psql "$DATABASE_URL" -c "
+            SELECT id FROM match_catalog(
+              qvec := '${ZERO_VEC}'::vector,
+              k := 1
+            );
+          "
+          echo "match_catalog RPC callable"

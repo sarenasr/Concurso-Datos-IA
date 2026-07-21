@@ -1,4 +1,4 @@
-# DATIA backend
+# Manglar backend
 
 FastAPI + LangGraph agent + MCP server + RAG over the Socrata catalog.
 
@@ -14,6 +14,5 @@ See the root `README.md` for setup. Key entrypoints:
 ```bash
 uv run python -m scripts.ingest_catalog      # load catalog into Supabase
 uv run python -m scripts.build_embeddings    # embed catalog rows (Gemini)
-uv run python -m scripts.pull_schemas        # fetch schemas for priority datasets
 uv run python -m scripts.build_graph         # build dataset knowledge graph
 ```

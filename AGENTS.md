@@ -1,13 +1,13 @@
-# DATIA Project Instructions
+# Manglar Project Instructions
 
 ## Project Overview
 
-DATIA is an AI assistant for Colombian open data (datos.gov.co). Users ask questions in natural Spanish; DATIA finds the right datasets, writes SoQL queries, validates them, and returns answers with Vega-Lite charts, citations, and permalinks.
+Manglar is an AI assistant for Colombian open data (datos.gov.co). Users ask questions in natural Spanish; Manglar finds the right datasets, writes SoQL queries, validates them, and returns answers with Vega-Lite charts, citations, and permalinks.
 
 ## Tech Stack
 
 - **Backend**: Python 3.11+, FastAPI, LangGraph, Supabase/pgvector, LiteLLM, MCP
-- **Frontend**: Next.js 16, React 19, TypeScript, Tailwind 4, shadcn/ui, Vercel AI SDK
+- **Frontend**: Next.js 16, React 19, TypeScript, Tailwind 4, shadcn/ui
 - **Package managers**: uv (backend), pnpm (frontend)
 - **Deploy**: Railway (backend), Vercel (frontend)
 
@@ -30,16 +30,16 @@ DATIA is an AI assistant for Colombian open data (datos.gov.co). Users ask quest
 
 - Python: ruff (line-length 100), type hints required, async-first
 - TypeScript: strict mode, no `any`, functional components
-- GovCo accent color: `#FAB012`
+- Brand: see `DESIGN.md` — Manglar palette (primary `#1b3f92`), Geologica font, `-0.99px` headline tracking
 - All user-facing text in Spanish
 - Commit messages: conventional commits format
 
 ## Architecture Notes
 
 - Backend agent uses LangGraph state graphs with tool nodes
-- RAG catalog stored in Supabase pgvector (768-dim local embeddings via sentence-transformers)
-- Frontend streams via SSE using Vercel AI SDK
-- MCP server exposes same tools to external clients via FastMCP
+- RAG catalog stored in Supabase pgvector (1024-dim embeddings via Google gemini-embedding-2 over OpenRouter)
+- Frontend streams via SSE using a custom fetch-based parser
+- MCP server exposes the same tools to a local MCP client (stdio) via FastMCP
 
 ## Subagent Model Selection (IMPORTANT)
 

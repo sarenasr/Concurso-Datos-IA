@@ -1,7 +1,7 @@
-# DATIA — Habla con los datos de Colombia
+# Manglar — Habla con los datos de Colombia
 
-DATIA is an AI assistant for Colombian open data (datos.gov.co, a Socrata portal).
-Users ask questions in natural Spanish; DATIA finds the right datasets, writes SoQL
+Manglar is an AI assistant for Colombian open data (datos.gov.co, a Socrata portal).
+Users ask questions in natural Spanish; Manglar finds the right datasets, writes SoQL
 queries, validates them, and returns an answer with a Vega-Lite chart, citations, and a
 "Ver consulta" permalink so the result is auditable.
 
@@ -10,56 +10,57 @@ Built for the **Concurso Datos al Ecosistema 2026** hackathon.
 ## Architecture
 
 ```
-                          +-----------------+
-        Telegram  ----->  |   FastAPI app   |  <-----  Next.js widget (Vercel)
-        (webhook)         |  /chat (SSE)    |          (shadcn + Vercel AI SDK)
-                          +--------+-------+
-                                   |
-              +--------------------+-------------------+
+                         +-----------------+
+ Telegram  ------------> |   FastAPI app   | <------------ Next.js widget (Vercel)
+ (webhook)               |   /chat (SSE)   |              (shadcn + SSE streaming)
+                         +--------+--------+
+                                  |
+              +-------------------+--------------------+
+              |                   |                    |
+      +-------v-------+   +-------v--------+   +-------v------+
+      |  LangGraph    |   |  RAG catalog   |   |  Graph       |
+      |  agent+tools  |   |  pgvector 0.6v |   |  networkx    |
+      |               |   |  + 0.4t fusion |   |              |
+      +-------+-------+   +-------+--------+   +-------+------+
               |                    |                   |
-      +-------v-------+   +--------v-------+   +------v------+
-      |  LangGraph    |   |  RAG catalog   |   |  Graph      |
-      |  agent (tools)|   |  pgvector RRF   |   |  networkx   |
-      +-------+-------+   +--------+-------+   +------+------+
-              |                    |                  |
-              +-------+-------+-----+------+-----------+
-                      |            |      |
-                +-----v----+  +----v---+ +-v--------+
-                | Socrata  |  | LiteLLM| | Supabase |
-                | client   |  | (LLM)  | | pgvector |
-                +----------+  +--------+ +----------+
+              +-------+------+-----+------+------------+
+                      |     |             |
+              +-------v--+ +-v--------+ +--v--------+
+              | Socrata  | | LiteLLM  | | Supabase  |
+              | client   | | (LLM)    | | pgvector  |
+              +----------+ +----------+ +-----------+
                       |
-                +-----v------+
-                |  FastMCP   |  (same tools exposed to external MCP clients)
-                +-----------+
+              +-------v------+  (same tools exposed to a local MCP client via stdio)
+              |  FastMCP     |
+              +--------------+
 ```
 
 - **Backend** (`apps/backend`): Python, FastAPI + LangGraph agent + MCP server + RAG over the
   Socrata catalog stored in Supabase pgvector. LiteLLM makes the LLM provider-agnostic.
-- **Frontend** (`apps/frontend`): Next.js 14 app-router + TS + Tailwind + shadcn/ui +
-  Vercel AI SDK. Streams answers, shows `SourcesCard`, "Ver consulta" button.
+- **Frontend** (`apps/frontend`): Next.js 16 app-router + React 19 + TS + Tailwind + shadcn/ui.
+  Streams answers via SSE (custom fetch-based parser), shows `SourcesCard`, "Ver consulta" button.
 - **Storage** (`infra/supabase`): Supabase with pgvector. SQL migrations under
   `infra/supabase/migrations`.
-- **Embeddings**: `paraphrase-multilingual-mpnet-base-v2` (768-dim) via sentence-transformers (local, no API key). Gemini `gemini-embedding-001` supported as alternative via config.
-- **LLM**: provider-agnostic via LiteLLM. Defaults to OpenCode Go (`glm-5.2`) or any OpenAI-compatible endpoint.
-- **Deploy**: backend on Railway (`infra/railway.toml`), frontend on Vercel.
+- **Embeddings**: Google `gemini-embedding-2` (1024-dim) via OpenRouter (requires `OPENROUTER_API_KEY`).
+- **LLM**: provider-agnostic via LiteLLM. OpenRouter is tried first; OpenCode Go (`glm-5.2`) is the fallback when no OpenRouter key is set or OpenRouter fails.
+- **Deploy**: backend on Railway, frontend on Vercel.
 
 ## Setup
 
 ```bash
-# 1. Environment
-cp .env.example .env          # fill every variable
+# 1. Environment — fill every variable in .env (see .env.example for reference)
+cp .env.example .env
 
 # 2. Supabase migrations
 #    Apply infra/supabase/migrations/*.sql in order (Supabase Studio SQL editor):
-#      001_catalog.sql -> 002_embeddings.sql -> 003_graph.sql
+#      001_catalog.sql -> 002_embeddings.sql -> 003_graph.sql -> 004_match_catalog.sql -> 005_fix_embedding_dim.sql
+#    After 005 you must re-run scripts.build_embeddings (the migration truncates catalog_embeddings).
 
 # 3. Backend (apps/backend)
 cd apps/backend
 uv sync
 uv run python -m scripts.ingest_catalog          # load Socrata catalog into Supabase
-uv run python -m scripts.build_embeddings        # embed catalog rows (local sentence-transformers, ~1.1GB download on first run)
-uv run python -m scripts.pull_schemas             # fetch schemas for priority datasets
+uv run python -m scripts.build_embeddings        # embed catalog rows via Google gemini-embedding-2 over OpenRouter (requires OPENROUTER_API_KEY)
 uv run python -m scripts.build_graph              # build the dataset graph
 uv run uvicorn app.main:app --reload --port 8000  # start API
 
@@ -67,6 +68,60 @@ uv run uvicorn app.main:app --reload --port 8000  # start API
 cd apps/frontend
 pnpm install
 pnpm dev
+```
+
+## MCP server
+
+Manglar ships a standalone [MCP](https://modelcontextprotocol.io) server (FastMCP) that exposes the same five
+tools the agent uses — `search_catalog`, `get_schema`, `query_dataset`, `graph_neighbors`, `make_chart` — to
+any local MCP client over **stdio**. It is launched by the client (it is not a network service and there is no
+HTTP endpoint). It auto-loads the repo-root `.env`, so `search_catalog` / `graph_neighbors` need
+`OPENROUTER_API_KEY` + Supabase configured, while `get_schema` / `query_dataset` only need `SOCRATA_*`.
+`make_chart` needs nothing.
+
+Run it directly (it will block, waiting for a client on stdin):
+
+```bash
+cd apps/backend
+uv run python -m app.mcp_server.server
+```
+
+### Add to Claude
+
+Claude Code — from the repo root:
+
+```bash
+claude mcp add manglar -- uv run --directory apps/backend python -m app.mcp_server.server
+```
+
+Claude Desktop — add to `claude_desktop_config.json` (`%APPDATA%\Claude\...` on Windows,
+`~/Library/Application Support/Claude/...` on macOS):
+
+```json
+{
+  "mcpServers": {
+    "manglar": {
+      "command": "uv",
+      "args": ["run", "--directory", "/absolute/path/to/apps/backend", "python", "-m", "app.mcp_server.server"]
+    }
+  }
+}
+```
+
+### Add to opencode
+
+Add an `mcp` block to `opencode.json` (command paths are relative to the repo root):
+
+```json
+{
+  "mcp": {
+    "manglar": {
+      "type": "local",
+      "command": ["uv", "run", "--directory", "apps/backend", "python", "-m", "app.mcp_server.server"],
+      "enabled": true
+    }
+  }
+}
 ```
 
 ## Hero 10 (demo script)
