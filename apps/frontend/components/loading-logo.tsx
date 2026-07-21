@@ -16,7 +16,7 @@ export function LoadingLogo({
       alt={alt}
       width={size}
       height={size}
-      className={className}
+      className={`manglar-isotipo-pulse ${className}`.trim()}
     />
   );
 }

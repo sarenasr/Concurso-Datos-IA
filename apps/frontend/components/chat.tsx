@@ -14,7 +14,6 @@ import {
   Code2,
   Sparkles,
   User,
-  MessageCircle,
   AlertCircle,
 } from "lucide-react";
 import { LoadingLogo } from "@/components/loading-logo";
@@ -372,13 +371,13 @@ export function Chat({ compact = false }: { compact?: boolean } = {}) {
                     : "mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-manglar-marea/15 ring-2 ring-manglar-marea/20"
                 }
               >
-                <MessageCircle
-                  className={
-                    compact
-                      ? "h-6 w-6 text-manglar-marea"
-                      : "h-10 w-10 text-manglar-marea"
-                  }
-                  strokeWidth={1.75}
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src="/brand/manglar-isotipo.png"
+                  alt="Manglar"
+                  width={compact ? 28 : 48}
+                  height={compact ? 28 : 48}
+                  className="shrink-0"
                 />
               </div>
               <h2

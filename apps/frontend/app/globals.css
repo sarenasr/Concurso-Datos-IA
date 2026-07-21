@@ -166,9 +166,27 @@ h2 {
   animation: none;
 }
 
+/* Loading isotipo: gentle opacity pulse per DESIGN.md (1.6s) */
+@keyframes manglar-isotipo-pulse {
+  0%, 100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.manglar-isotipo-pulse {
+  animation: manglar-isotipo-pulse 1.6s ease-in-out infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .manglar-bubble-pulse,
-  .manglar-panel-enter {
+  .manglar-panel-enter,
+  .manglar-isotipo-pulse {
     animation: none;
+  }
+  .manglar-isotipo-pulse {
+    opacity: 1;
   }
 }

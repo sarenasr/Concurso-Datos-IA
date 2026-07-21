@@ -1,14 +1,20 @@
 "use client";
 
 import { Chat } from "@/components/chat";
-import Image from "next/image";
 
 export default function Home() {
   return (
     <div className="flex h-dvh flex-col overflow-hidden bg-background">
       {/* Header */}
       <header className="flex shrink-0 items-center gap-3 border-b border-border/60 bg-background/95 backdrop-blur-sm px-4 py-3 md:px-6">
-        <Image src="/brand/manglar-isotipo.png" alt="Isotipo de Manglar" width={40} height={40} priority />
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/brand/manglar-isotipo.png"
+          alt="Isotipo de Manglar"
+          width={40}
+          height={40}
+          className="shrink-0"
+        />
         <div>
           <h1 className="font-sans text-2xl font-extrabold tracking-display text-manglar-raiz dark:text-manglar-marea">
             Manglar
