@@ -1,1 +1,1 @@
-"""MCP server package exposing DATIA tools to external MCP clients."""
+"""MCP server package exposing Manglar tools to external MCP clients."""

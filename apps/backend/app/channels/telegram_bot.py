@@ -1,4 +1,4 @@
-"""Telegram polling bot for DATIA.
+"""Telegram polling bot for Manglar.
 
 Run locally:
     uv run python -m app.channels.telegram_bot
@@ -15,7 +15,7 @@ import logging
 
 from app.config import settings
 
-log = logging.getLogger("datia.telegram")
+log = logging.getLogger("manglar.telegram")
 
 TELEGRAM_MAX_LEN = 4096
 TYPING_INTERVAL = 4
@@ -51,7 +51,7 @@ def _format_chart_info(chart: dict | None) -> str:
     """Provide a text note when a chart was generated (HTML)."""
     if not chart:
         return ""
-    return "\n<i>Se generó un gráfico con los datos. Consúltalo en la versión web de DATIA.</i>"
+    return "\n<i>Se generó un gráfico con los datos. Consúltalo en la versión web de Manglar.</i>"
 
 
 async def _send_typing_loop(context, chat_id: int, stop_event: asyncio.Event) -> None:
@@ -115,7 +115,7 @@ def _build_app():
 
     async def _start(update, context):  # noqa: ANN001
         await update.message.reply_text(
-            "Hola, soy DATIA. Preguntame sobre los datos abiertos de Colombia.\n\n"
+            "Hola, soy Manglar. Preguntame sobre los datos abiertos de Colombia.\n\n"
             "Escribe tu pregunta en lenguaje natural y buscaré los datos relevantes "
             "en datos.gov.co para responder.\n\n"
             "Usa /help para ver ejemplos."

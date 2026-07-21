@@ -2,13 +2,20 @@
 
 `ingest_catalog` loads every Socrata catalog row into the `catalog` table.
 `search_catalog` does hybrid retrieval: dense vector cosine search + keyword
-(ilike) fallback, with a priority-dataset boost and a keyword-based safety net
-to guarantee the Hero-10 datasets surface correctly.
+(ilike) fallback, fused with Reciprocal Rank Fusion (RRF). A priority-dataset
+boost and a keyword-based safety net guarantee the Hero-10 datasets surface
+correctly.
+
+The vector leg uses the `match_catalog` Supabase RPC (see
+`infra/supabase/migrations/004_match_catalog.sql`). On RPC failure we log and
+skip the vector leg unless `NUMPY_FALLBACK=1` enables a slow
+in-process NumPy fallback.
 """
 
 from __future__ import annotations
 
 import logging
+import math
 import re
 from functools import lru_cache
 from pathlib import Path
@@ -20,14 +27,40 @@ from app.config import settings
 from app.rag.embeddings import embed_text
 from app.socrata.client import SocrataClient
 
-log = logging.getLogger("datia.rag")
+log = logging.getLogger("manglar.rag")
 
 _PRIORITY_YAML = Path(__file__).resolve().parent.parent.parent / "data" / "priority_datasets.yaml"
-_PRIORITY_BOOST = 1.3  # score multiplier for priority datasets
 
-# Weights for hybrid fusion (vector + keyword)
-_VECTOR_WEIGHT = 0.6
-_TEXT_WEIGHT = 0.4
+_RRF_K = 60
+_PRIORITY_BOOST_ADD = 0.02
+_PRIORITY_FALLBACK_SCORE = 0.05
+_PRIORITY_FALLBACK_THRESHOLD = 0.02
+_MAX_KEYWORD_TOKENS = 5
+
+_STOPWORDS = frozenset(
+    {
+        "los",
+        "las",
+        "del",
+        "de",
+        "para",
+        "por",
+        "con",
+        "que",
+        "hay",
+        "cuantos",
+        "cuantas",
+        "cuales",
+        "una",
+        "uno",
+        "unos",
+        "unas",
+        "más",
+        "mas",
+    }
+)
+
+_TOKEN_RE = re.compile(r"[^a-záéíóúüñ]+")
 
 
 @lru_cache(maxsize=1)
@@ -84,6 +117,28 @@ def _expand_synonyms(words: set[str]) -> set[str]:
         if w in _SYNONYM_MAP:
             expanded |= _SYNONYM_MAP[w]
     return expanded
+
+
+def _tokenize_query(query: str) -> list[str]:
+    """Tokenize a natural-language query into search terms for keyword retrieval.
+
+    Lowercases, splits on non-alpha characters, keeps words with 3+ characters,
+    removes Spanish stopwords, then expands synonyms. Returns a deduplicated list
+    preserving first-seen order (original tokens first, then synonym additions).
+    """
+    q = query.lower()
+    raw = [w for w in _TOKEN_RE.split(q) if len(w) >= 3 and w not in _STOPWORDS]
+    seen: set[str] = set()
+    result: list[str] = []
+    for w in raw:
+        if w not in seen:
+            seen.add(w)
+            result.append(w)
+    for w in _expand_synonyms(set(raw)):
+        if w not in seen:
+            seen.add(w)
+            result.append(w)
+    return result
 
 
 def _priority_keyword_match(query: str) -> list[dict]:
@@ -167,6 +222,9 @@ def ingest_catalog(limit: int | None = None) -> int:
         row = _flatten(item)
         if not row["id"]:
             continue
+        # Only index queryable tabular datasets; skip charts, maps, stories, etc.
+        if row.get("type") != "dataset":
+            continue
         batch.append(row)
         n += 1
         if n % 1000 == 0:
@@ -199,19 +257,20 @@ def search_catalog(
     """Retrieve the most relevant datasets for a natural-language `query`.
 
     Hybrid retrieval:
-    1. Dense vector cosine search via pgvector RPC (with popularity prior).
-    2. Keyword search via ``ilike`` on the catalog ``name`` column.
-    3. Fuse both legs: ``final_score = 0.6 * vector_score + 0.4 * text_score``.
-       Datasets appearing in only one leg keep that score (normalised to 0-1).
-    4. Priority-dataset boost: multiply by 1.3 for any dataset in the priority
-       YAML list (hand-curated, high-confidence schemas).
-    5. Keyword fallback: if no priority dataset lands in the top-5, inject the
+    1. Dense vector cosine search via pgvector RPC.
+    2. Keyword search via per-token ``ilike`` on the catalog ``name`` column.
+    3. Fuse both legs with Reciprocal Rank Fusion (RRF, k=60).
+    4. Popularity prior as additive tie-breaker (not a multiplier).
+    5. Priority-dataset boost: add a small absolute bump for datasets in the
+       priority YAML list (hand-curated, high-confidence schemas).
+    6. Keyword fallback: if no priority dataset lands in the top-5, inject the
        best keyword-matched priority dataset as result #1.
+    7. LLM reranker (when ``ENABLE_RERANKER`` is true): ask a small LLM to
+       score each candidate's relevance and blend with the fused score.
     """
     sb = _supabase()
     qvec = embed_text(query)
 
-    # --- Leg 1: dense vector search ----------------------------------------
     try:
         params: dict[str, Any] = {
             "qvec": str(qvec),
@@ -220,114 +279,141 @@ def search_catalog(
         if sector:
             params["sector"] = sector
         vector_rows = sb.rpc("match_catalog", params).execute().data
-    except Exception:
-        vector_rows = _fallback_cosine_search(sb, qvec, k * 4, sector, municipio)
+    except Exception as exc:
+        log.warning("match_catalog RPC failed, skipping vector leg: %s", exc)
+        if settings.numpy_fallback:
+            vector_rows = _numpy_emergency_search(sb, qvec, k * 4, sector, municipio)
+        else:
+            vector_rows = []
 
-    vector_rows = _apply_popularity_prior(vector_rows)
-
-    # --- Leg 2: keyword search via ilike on name ---------------------------
     text_rows = _keyword_search(sb, query, k * 4)
 
-    # --- Fuse both legs ----------------------------------------------------
     fused = _fuse_results(vector_rows, text_rows)
 
-    # --- Priority boost ----------------------------------------------------
+    fused = _apply_popularity_prior(fused)
+
     fused = _apply_priority_boost(fused)
 
-    # Re-sort after fusion + boost
     fused.sort(key=lambda r: r["score"], reverse=True)
 
-    # --- Keyword fallback for priority datasets ----------------------------
     fused = _priority_fallback(fused, query, k)
+
+    if settings.enable_reranker:
+        from app.rag.reranker import rerank_datasets
+
+        fused = rerank_datasets(query, fused, top_k=k)
 
     return fused[:k]
 
 
 def _keyword_search(sb, query: str, k: int) -> list[dict]:
-    """Keyword search leg: ilike on the catalog ``name`` column.
+    """Keyword search leg: per-token ``ilike`` on the catalog ``name`` column.
+
+    Tokenizes the query (same pipeline as ``_priority_keyword_match``), then
+    issues one ``ilike`` query per token (capped at ``_MAX_KEYWORD_TOKENS``).
+    Results are unioned in Python; when a dataset matches multiple tokens its
+    ``text_score`` uses the best (lowest) rank across all token queries.
 
     Returns a list of dicts with the same shape as vector results, with a
-    ``text_score`` normalised to [0, 1] based on position in the result set.
+    ``text_score`` based on linear rank decay from 1.0 to 0.
     """
-    # Take the first meaningful words from the query (up to 50 chars) for ilike
-    snippet = query[:50].strip()
-    if not snippet:
-        return []
-    try:
-        text_rows = (
-            sb.table("catalog")
-            .select("id, name, description, domain_category, permalink, page_views_last_month")
-            .ilike("name", f"%{snippet}%")
-            .limit(k)
-            .execute()
-            .data
-        )
-    except Exception as exc:  # noqa: BLE001
-        log.warning("keyword search failed: %s", exc)
+    tokens = _tokenize_query(query)[:_MAX_KEYWORD_TOKENS]
+    if not tokens:
         return []
 
-    # Assign text_score: 1.0 for first result, decaying linearly
-    n = len(text_rows)
-    for i, r in enumerate(text_rows):
-        r["text_score"] = 1.0 - (i / max(n, 1))
-    return text_rows
+    best_rank: dict[str, int] = {}
+    row_by_id: dict[str, dict] = {}
+
+    for token in tokens:
+        try:
+            rows = (
+                sb.table("catalog")
+                .select("id, name, description, domain_category, permalink, page_views_last_month")
+                .eq("type", "dataset")
+                .ilike("name", f"%{token}%")
+                .limit(k)
+                .execute()
+                .data
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("keyword search for token '%s' failed: %s", token, exc)
+            continue
+
+        for rank, r in enumerate(rows):
+            rid = r.get("id")
+            if not rid:
+                continue
+            if rid not in row_by_id:
+                row_by_id[rid] = r
+            if rid not in best_rank or rank < best_rank[rid]:
+                best_rank[rid] = rank
+
+    n = len(row_by_id)
+    if n == 0:
+        return []
+
+    result: list[dict] = []
+    for rid, row in row_by_id.items():
+        entry = dict(row)
+        entry["text_score"] = 1.0 - (best_rank[rid] / max(n, 1))
+        result.append(entry)
+
+    result.sort(key=lambda r: r["text_score"], reverse=True)
+    return result[:k]
 
 
 def _fuse_results(vector_rows: list[dict], text_rows: list[dict]) -> list[dict]:
-    """Merge vector and keyword results by dataset ID.
+    """Merge vector and keyword results using Reciprocal Rank Fusion.
 
-    Scoring:
-    - If a dataset appears in both legs: ``0.6 * vector_score + 0.4 * text_score``
-    - If only in vector leg: keep vector score (already normalised by popularity).
-    - If only in text leg: keep text_score (already normalised to [0, 1]).
+    For each dataset ``d`` the fused score is::
+
+        score(d) = sum( 1 / (_RRF_K + rank_in_leg(d)) )
+
+    where ``rank_in_leg`` is 0-indexed within each leg. Datasets absent from a
+    leg simply contribute nothing for that leg. The result is sorted by RRF
+    score descending.
     """
     by_id: dict[str, dict] = {}
 
-    for r in vector_rows:
+    for rank, r in enumerate(vector_rows):
         rid = r.get("id")
         if not rid:
             continue
         entry = dict(r)
-        entry["_vector_score"] = float(entry.get("score", 0.0))
-        entry["_text_score"] = 0.0
+        entry["score"] = 1.0 / (_RRF_K + rank)
         by_id[rid] = entry
 
-    for r in text_rows:
+    for rank, r in enumerate(text_rows):
         rid = r.get("id")
         if not rid:
             continue
-        text_score = float(r.get("text_score", 0.0))
+        rrf_contrib = 1.0 / (_RRF_K + rank)
         if rid in by_id:
-            by_id[rid]["_text_score"] = text_score
+            by_id[rid]["score"] += rrf_contrib
         else:
             entry = dict(r)
-            entry["_vector_score"] = 0.0
-            entry["_text_score"] = text_score
-            entry["score"] = text_score
+            entry["score"] = rrf_contrib
             by_id[rid] = entry
 
-    # Compute fused score
-    for entry in by_id.values():
-        vs = entry.pop("_vector_score", 0.0)
-        ts = entry.pop("_text_score", 0.0)
-        if vs > 0 and ts > 0:
-            entry["score"] = _VECTOR_WEIGHT * vs + _TEXT_WEIGHT * ts
-        elif vs > 0:
-            entry["score"] = vs
-        else:
-            entry["score"] = ts
-
-    return list(by_id.values())
+    result = list(by_id.values())
+    result.sort(key=lambda r: r["score"], reverse=True)
+    return result
 
 
 def _apply_priority_boost(rows: list[dict]) -> list[dict]:
-    """Multiply the score of priority datasets by ``_PRIORITY_BOOST`` (1.3x)."""
+    """Add a small absolute bump to the RRF score of priority datasets.
+
+    RRF scores live in ``[0, ~0.033]`` so a multiplicative boost (the old 1.3×)
+    would be disproportionate at this scale. Instead we add ``_PRIORITY_BOOST_ADD``
+    (0.02) — enough to promote a priority dataset within the noise floor but not
+    enough to swamp the similarity signal from the retrieval legs.
+    """
     pids = _priority_ids()
     if not pids:
         return rows
     for r in rows:
         if r.get("id") in pids:
-            r["score"] = float(r.get("score", 0.0)) * _PRIORITY_BOOST
+            r["score"] = float(r.get("score", 0.0)) + _PRIORITY_BOOST_ADD
     return rows
 
 
@@ -335,13 +421,14 @@ def _priority_fallback(rows: list[dict], query: str, k: int) -> list[dict]:
     """Ensure the best keyword-matched priority dataset is in the results.
 
     Two-stage logic:
-    1. If the top-5 already contains the *best* keyword-matched priority dataset
-       (the one with the most hits), do nothing.
+    1. If the top result already *is* the best keyword-matched priority dataset
+       with a score above ``_PRIORITY_FALLBACK_THRESHOLD``, do nothing.
     2. Otherwise inject (or boost) the best match to position #1.
 
-    This fixes the bug where a *different* priority dataset (e.g. Bolsa A)
-    lands in the top-5 via vector similarity, causing the old early-return to
-    skip injecting the *correct* priority dataset (e.g. SECOP II Contratos).
+    The injected entry gets ``_PRIORITY_FALLBACK_SCORE`` (0.05) — a small
+    RRF-scale value that reliably promotes the priority dataset above the noise
+    floor without fabricating a high-confidence score. Tagged with
+    ``"reason": "priority_keyword_match"`` for auditability.
     """
     matches = _priority_keyword_match(query)
     if not matches:
@@ -350,20 +437,23 @@ def _priority_fallback(rows: list[dict], query: str, k: int) -> list[dict]:
     best = matches[0]
     best_id = best["id"]
 
-    # If the best keyword match is already #1 with a strong score, leave it
     top = rows[0] if rows else None
-    if top and top.get("id") == best_id and float(top.get("score", 0.0)) >= 0.5:
+    if (
+        top
+        and top.get("id") == best_id
+        and float(top.get("score", 0.0)) >= _PRIORITY_FALLBACK_THRESHOLD
+    ):
         return rows
 
-    # Check if the best match is already somewhere in the results
     existing = next((r for r in rows if r.get("id") == best_id), None)
     if existing:
-        # Boost it to the top with a high score
-        existing["score"] = max(float(existing.get("score", 0.0)) * _PRIORITY_BOOST, 0.95)
+        existing["score"] = max(
+            float(existing.get("score", 0.0)) + _PRIORITY_BOOST_ADD,
+            _PRIORITY_FALLBACK_SCORE,
+        )
         rows.sort(key=lambda r: r["score"], reverse=True)
         return rows
 
-    # Inject as result #1 with a high confidence score
     injected = {
         "id": best_id,
         "name": best.get("name", ""),
@@ -371,19 +461,23 @@ def _priority_fallback(rows: list[dict], query: str, k: int) -> list[dict]:
         "domain_category": best.get("sector", ""),
         "permalink": f"https://{settings.socrata_domain}/d/{best_id}",
         "page_views_last_month": 0,
-        "score": 0.95,  # high confidence injection
+        "score": _PRIORITY_FALLBACK_SCORE,
+        "reason": "priority_keyword_match",
     }
     return [injected] + rows
 
 
 def _apply_popularity_prior(rows: list[dict]) -> list[dict]:
-    import math
+    """Nudge scores by popularity as a tie-breaker, not a multiplier.
 
+    Adds ``log1p(page_views_last_month) / 1000`` to each score so that
+    popularity can break ties between equally-ranked datasets but never
+    swallows the similarity signal from the retrieval legs.
+    """
     for r in rows:
-        sim = float(r.get("score", 0.0))
         pv = float(r.get("page_views_last_month") or 0)
-        prior = 1.0 + math.log(max(pv, 1)) / 100.0
-        r["score"] = sim * prior
+        prior = math.log1p(max(pv, 0)) / 1000.0
+        r["score"] = float(r.get("score", 0.0)) + prior
     rows.sort(key=lambda r: r["score"], reverse=True)
     return rows
 
@@ -410,7 +504,7 @@ def _parse_embedding(emb: Any) -> list[float] | None:
         return None
 
 
-def _fallback_cosine_search(
+def _numpy_emergency_search(
     sb, qvec: list[float], k: int, sector: str | None, municipio: str | None
 ) -> list[dict]:
     """Naive fallback: pull embeddings table + catalog, compute cosine in numpy."""
@@ -421,7 +515,8 @@ def _fallback_cosine_search(
     )
     cat_rows = (
         sb.table("catalog")
-        .select("id, name, description, domain_category, permalink, page_views_last_month")
+        .select("id, name, description, domain_category, permalink, page_views_last_month, type")
+        .eq("type", "dataset")
         .execute()
         .data
     )

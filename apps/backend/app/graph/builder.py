@@ -1,6 +1,6 @@
 """Automatic dataset knowledge-graph builder.
 
-This is the rigor/innovation centerpiece of DATIA. We discover relationships between
+This is the rigor/innovation centerpiece of Manglar. We discover relationships between
 the ~30 priority datasets so the agent can answer cross-sector questions
 ("empresas sancionadas que además tienen contratos en salud en Antioquia") by
 following graph edges instead of guessing.
@@ -152,49 +152,21 @@ def _same_topic_pairs(sb, dataset_ids: list[str]) -> list[tuple[str, str, float]
     return pairs
 
 
-def _get_normalized_schema_from_registry(registry: list[dict], dataset_id: str) -> list[dict]:
-    """Get columns from the pre-built registry.yaml instead of the blocked Socrata API."""
-    for ds in registry:
-        if ds.get("id") == dataset_id:
-            out = []
-            for c in ds.get("columns", []):
-                raw = c.get("name") or c.get("field_name") or ""
-                field = c.get("field_name") or raw
-                out.append(
-                    {
-                        "raw_name": raw,
-                        "field_name": field,
-                        "normalized": normalize_column(raw),
-                        "datatype": c.get("datatype"),
-                    }
-                )
-            return out
-    return []
-
-
 def build_graph(dataset_ids: list[str]) -> dict:
     """Run the full graph-build pipeline for the given dataset ids.
 
     Returns a small report dict: counts of nodes/edges produced.
     """
-    import yaml
-    from pathlib import Path
-
     sb = _supabase()
     client = SocrataClient(settings.socrata_domain, settings.socrata_app_token)
-
-    # Load schema registry instead of hitting the blocked /api/views endpoint
-    registry_path = Path(__file__).resolve().parent.parent / "schemas" / "registry.yaml"
-    registry_data = yaml.safe_load(registry_path.read_text(encoding="utf-8")) or {}
-    registry = registry_data.get("datasets", [])
 
     # ---- Step 1+2: schemas + classification -------------------------------
     schemas: dict[str, list[dict]] = {}
     classified: dict[str, dict[str, str]] = {}
     for did in dataset_ids:
-        schema = _get_normalized_schema_from_registry(registry, did)
+        schema = _get_normalized_schema(client, did)
         if not schema:
-            print(f"[build_graph] no schema for {did} in registry")
+            print(f"[build_graph] no schema for {did} from live API")
             continue
         schemas[did] = schema
         raw_names = [c["raw_name"] for c in schema]

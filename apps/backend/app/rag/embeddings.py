@@ -15,7 +15,7 @@ from openai import OpenAI
 
 from app.config import settings
 
-log = logging.getLogger("datia.rag.embeddings")
+log = logging.getLogger("manglar.rag.embeddings")
 
 EMBEDDING_MODEL = "google/gemini-embedding-2"
 EMBEDDING_DIM = 1024
@@ -62,10 +62,10 @@ def embed_texts(texts: Iterable[str]) -> list[list[float]]:
                     input=chunk,
                     dimensions=EMBEDDING_DIM,
                     encoding_format="float",
-                    #extra_headers={
+                    # extra_headers={
                     #    "HTTP-Referer": "https://concurso-datos-ia.vercel.app",
-                    #    "X-OpenRouter-Title": "DATIA - Asistente IA Datos Colombia",
-                    #},
+                    #    "X-OpenRouter-Title": "Manglar - Asistente IA Datos Colombia",
+                    # },
                 )
                 out.extend([e.embedding for e in resp.data])
                 break

@@ -1,1 +1,1 @@
-"""DATIA backend application package."""
+"""Manglar backend application package."""

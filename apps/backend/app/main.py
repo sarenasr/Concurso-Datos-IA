@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import time
 from functools import lru_cache
 from typing import Any
 
@@ -16,7 +18,15 @@ from pydantic import BaseModel, Field
 from app.config import settings
 from app.socrata.client import SocrataClient
 
-log = logging.getLogger("datia.api")
+# Wire root logger from LOG_LEVEL env var (falls back to settings.log_level).
+# Only configure if no handlers exist yet (avoids overriding uvicorn's config).
+if not logging.getLogger().handlers:
+    logging.basicConfig(
+        level=os.environ.get("LOG_LEVEL", settings.log_level).upper(),
+        format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
+    )
+
+log = logging.getLogger("manglar.api")
 
 _STEP_LABELS = {
     "search": "Buscando datasets relevantes en datos.gov.co...",
@@ -27,11 +37,21 @@ _STEP_LABELS = {
     "answer": "Redactando la respuesta final...",
 }
 
-app = FastAPI(title="DATIA", version="0.1.0")
+app = FastAPI(title="Manglar", version="0.1.0")
+
+_cors_origins = settings.cors_origins
+if not _cors_origins:
+    log.warning("CORS_ORIGINS is empty — allowing all origins WITHOUT credentials (demo mode)")
+    _cors_origins = ["*"]
+else:
+    log.info("CORS allow-list: %s", _cors_origins)
+
+_cors_allow_credentials: bool = bool(_cors_origins and _cors_origins != ["*"])
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
+    allow_credentials=_cors_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -105,11 +125,53 @@ def _emit_result_events(state: dict) -> list[str]:
 
 # --- Health ----------------------------------------------------------------
 
+_START_TIME = time.time()
+_HEALTH_CACHE_TTL = 10  # seconds
+_health_cache: tuple[float, dict] = (0, {})
+
+
+def _supabase_health() -> str:
+    """Ping Supabase with a minimal query. Returns 'ok', 'fail', or 'timeout'."""
+    if not settings.supabase_url or not settings.supabase_key_resolved:
+        return "fail"
+    try:
+        from supabase import create_client
+
+        sb = create_client(settings.supabase_url, settings.supabase_key_resolved)
+        sb.table("catalog").select("id").limit(1).execute()
+        return "ok"
+    except TimeoutError:
+        return "timeout"
+    except Exception:
+        return "fail"
+
+
+def _compute_health() -> dict:
+    """Run live checks and return the health envelope."""
+    sb_status = _supabase_health()
+    overall = "ok" if sb_status == "ok" else "degraded"
+    return {
+        "status": overall,
+        "checks": {"supabase": sb_status},
+        "uptime_s": int(time.time() - _START_TIME),
+    }
+
 
 @app.get("/health")
 def health() -> dict:
-    """Report static service status (no live connection checks)."""
-    return {"status": "ok", "agent": "ready", "supabase": "connected"}
+    """Liveness + readiness probe. Always returns HTTP 200.
+
+    Caches the result for 10 seconds to avoid hammering Supabase on every probe.
+    ``status`` is ``"ok"`` only if Supabase is reachable; ``"degraded"`` otherwise.
+    """
+    global _health_cache
+    now = time.time()
+    cached_at, cached_body = _health_cache
+    if now - cached_at < _HEALTH_CACHE_TTL and cached_body:
+        return cached_body
+    body = _compute_health()
+    _health_cache = (now, body)
+    return body
 
 
 # --- Chat (SSE) -------------------------------------------------------------
@@ -184,6 +246,15 @@ async def chat(request: Request) -> StreamingResponse | JSONResponse:
             "chart": None,
             "sources": [],
             "step": "search",
+            "is_join_question": False,
+            "join_partner_id": None,
+            "join_key_primary": None,
+            "join_key_partner": None,
+            "partner_schema": None,
+            "partner_soql": None,
+            "partner_query_result": None,
+            "is_chitchat": False,
+            "chitchat_answer_text": "",
         }
 
         import threading
@@ -219,7 +290,7 @@ async def chat(request: Request) -> StreamingResponse | JSONResponse:
                 label = _STEP_LABELS.get(node_name)
                 if label:
                     yield _sse({"type": "thinking", "content": label})
-                if node_name == "answer":
+                if node_name in ("answer", "chitchat_answer"):
                     final_state = state
             await asyncio.sleep(0)  # yield to event loop so SSE flushes
 
@@ -272,5 +343,5 @@ def api_query(
         rows = client.query(dataset_id, soql)
         return JSONResponse(rows)
     except Exception as exc:  # noqa: BLE001
-        log.warning("api_query %s failed: %s", dataset_id, exc)
+        log.exception("api_query %s failed: %s", dataset_id, exc)
         return JSONResponse({"error": str(exc)}, status_code=502)

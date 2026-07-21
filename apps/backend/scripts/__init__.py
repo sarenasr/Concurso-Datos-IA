@@ -1,1 +1,1 @@
-"""DATIA CLI scripts package."""
+"""Manglar CLI scripts package."""

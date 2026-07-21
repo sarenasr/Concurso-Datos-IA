@@ -10,19 +10,14 @@ from __future__ import annotations
 
 import logging
 from functools import lru_cache
-from pathlib import Path
 from typing import Any
-
-import yaml
 
 from app.config import settings
 from app.graph.loader import graph_neighbors as _graph_neighbors
 from app.rag.catalog import search_catalog as _rag_search_catalog
 from app.socrata.client import SocrataClient
 
-log = logging.getLogger("datia.tools")
-
-REGISTRY_PATH = Path(__file__).resolve().parent.parent / "schemas" / "registry.yaml"
+log = logging.getLogger("manglar.tools")
 
 _DATE_HINTS = ("fecha", "mes", "año", "ano", "date", "vigencia")
 
@@ -31,14 +26,6 @@ _DATE_HINTS = ("fecha", "mes", "año", "ano", "date", "vigencia")
 def _socrata() -> SocrataClient:
     """Build a SocrataClient configured for datos.gov.co (cached singleton)."""
     return SocrataClient(settings.socrata_domain, settings.socrata_app_token)
-
-
-@lru_cache(maxsize=1)
-def _load_registry() -> dict:
-    """Load and cache the schema registry YAML as a dict."""
-    if not REGISTRY_PATH.exists():
-        return {}
-    return yaml.safe_load(REGISTRY_PATH.read_text(encoding="utf-8")) or {}
 
 
 def search_catalog(query: str, k: int = 5) -> list[dict]:
@@ -78,13 +65,18 @@ def get_schema(dataset_id: str) -> dict | None:
     Returns a dict shaped like {id, name, permalink, columns: [...]} where each
     column is {name, field_name, datatype, description}.
 
-    Always fetches from the live API to ensure correct column names (the registry
-    YAML has encoding-corrupted field names that cause bad SoQL queries).
+    Always fetches from the live API to ensure correct column names.
     """
     try:
         views = _socrata().get_views(dataset_id)
+        # Charts, maps and stories expose a views endpoint but have no queryable
+        # columns. Treat them as unavailable so the agent picks a real dataset.
+        raw_columns = views.get("columns") or []
+        if not raw_columns:
+            log.warning("get_schema %s has no columns (likely a chart/story asset)", dataset_id)
+            return None
         columns = []
-        for col in views.get("columns", []):
+        for col in raw_columns:
             columns.append(
                 {
                     "name": col.get("name", ""),
@@ -102,7 +94,7 @@ def get_schema(dataset_id: str) -> dict | None:
             "columns": columns,
         }
     except Exception as exc:  # noqa: BLE001
-        log.warning("Failed to fetch schema from API for %s: %s", dataset_id, exc)
+        log.exception("get_schema %s failed: %s", dataset_id, exc)
         return None
 
 
@@ -120,7 +112,10 @@ def query_dataset(dataset_id: str, soql: str) -> dict:
     try:
         rows = _socrata().query(dataset_id, soql)
     except Exception as exc:  # noqa: BLE001
-        log.warning("query_dataset %s failed: %s", dataset_id, exc)
+        # Expected, recoverable failure: a bad SoQL clause (400) is fed back to the
+        # LLM for self-correction, so log a compact warning instead of a full
+        # stack trace to keep the console readable.
+        log.warning("query_dataset %s failed (will self-correct): %s", dataset_id, exc)
         return {"rows": [], "count": 0, "error": str(exc)}
     return {"rows": rows, "count": len(rows), "error": None}
 
@@ -139,6 +134,20 @@ def graph_neighbors(dataset_id: str) -> list[dict]:
 
 def _is_number(v: Any) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _coerce_number(v: Any) -> float | None:
+    """Coerce a value (incl. Socrata's stringified numbers) to float, or None."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    if isinstance(v, str):
+        try:
+            return float(v.strip())
+        except ValueError:
+            return None
+    return None
 
 
 def _looks_like_date(key: str) -> bool:

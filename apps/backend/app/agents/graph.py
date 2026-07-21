@@ -1,7 +1,13 @@
-"""LangGraph agent: search -> schema -> generate_soql -> exhaust_self_correct -> answer.
+"""LangGraph agent: triage -> search -> schema -> generate_soql -> exhaust_self_correct -> answer.
 
-State machine nodes: search, schema, generate_soql, execute_query, check_result,
-answer. On a SoQL error the agent regenerates the query up to ``MAX_RETRIES``
+State machine nodes: triage, chitchat_answer, search, schema, generate_soql,
+execute_query, check_result, answer. ``triage`` asks a small LLM to classify the
+incoming question and, for meta/greeting/capability questions, to draft the
+Spanish reply in the same call; that pair short-circuits straight to
+``chitchat_answer`` (falling back to the canned ``CHITCHAT_ANSWER`` if the LLM
+left the answer blank) with no DB/chart work, while genuine data questions
+proceed into the usual pipeline starting at ``search``. On a SoQL error the
+agent regenerates the query up to ``MAX_RETRIES``
 times, feeding the error message back into the LLM prompt so the next attempt can
 fix the broken clause. The final answer is generated in Spanish by a separate LLM
 call, paired with citations and (when tabular) a Vega-Lite chart.
@@ -19,113 +25,23 @@ import logging
 import re
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import TypedDict
 
 import yaml
 from langgraph.graph import END, StateGraph
-from tenacity import retry, stop_after_attempt, wait_exponential
 
 from app.agents import few_shots
 from app.agents import tools as T
+from app.agents.llm import llm_complete, llm_complete_small
+from app.agents.tools import _coerce_number, _is_number
 from app.config import settings
 
-log = logging.getLogger("datia.agent")
+log = logging.getLogger("manglar.agent")
 
 MAX_RETRIES = 2
+_SOQL_HARD_LIMIT = 50000
 
 _HERO_YAML = Path(__file__).resolve().parent.parent.parent / "data" / "hero_questions.yaml"
-
-
-# --- LLM helper -----------------------------------------------------------
-
-
-def _completion_kwargs(model_name: str = "") -> dict[str, Any]:
-    """Build (model, kwargs) for a litellm.completion call from settings.
-
-    Routes through the OpenAI-compatible LITELLM_API_BASE (OpenCode Go) when
-    present, else uses OpenRouter if OPENROUTER_API_KEY is set, else uses the
-    model as-is with the default LiteLLM routing.
-    """
-    model = model_name or settings.litellm_model
-    kwargs: dict[str, Any] = {"timeout": 30}
-    if settings.litellm_api_base:
-        if not model.startswith("openai/"):
-            model = f"openai/{model}"
-        kwargs["api_base"] = settings.litellm_api_base
-        key = settings.litellm_api_key_resolved
-        if key:
-            kwargs["api_key"] = key
-    elif settings.openrouter_api_key:
-        if not model.startswith("openrouter/"):
-            model = f"openrouter/{model}"
-        kwargs["api_key"] = settings.openrouter_api_key
-    else:
-        key = settings.litellm_api_key_resolved
-        if key:
-            kwargs["api_key"] = key
-    return {"model": model, **kwargs}
-
-
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=1, max=10),
-    reraise=True,
-)
-def _litellm_completion(model: str, **kwargs) -> Any:
-    """Call litellm.completion with retry/backoff for transient HTTP failures."""
-    import litellm
-
-    return litellm.completion(model=model, **kwargs)
-
-
-def _openrouter_kwargs(model_name: str) -> dict[str, Any]:
-    """Build LiteLLM kwargs for a direct OpenRouter call."""
-    if not settings.openrouter_api_key:
-        raise RuntimeError("No OpenRouter API key configured")
-    model = f"openrouter/{model_name}" if not model_name.startswith("openrouter/") else model_name
-    return {
-        "model": model,
-        "api_key": settings.openrouter_api_key,
-        "api_base": "https://openrouter.ai/api/v1",
-        "timeout": 30,
-    }
-
-
-def _call_with_fallback(model_setting: str, messages: list[dict], temperature: float) -> str:
-    """Try OpenRouter first, fall back to OpenCode Go on failure."""
-    if settings.openrouter_api_key:
-        fw = _openrouter_kwargs(model_setting)
-        model_fb = fw.pop("model")
-        try:
-            resp = _litellm_completion(
-                model=model_fb, messages=messages, temperature=temperature, **fw
-            )
-            return resp["choices"][0]["message"]["content"]  # type: ignore[index]
-        except Exception as exc:
-            log.warning("OpenRouter failed: %s — falling back to OpenCode Go", exc)
-    kw = _completion_kwargs(model_setting)
-    model = kw.pop("model")
-    resp = _litellm_completion(model=model, messages=messages, temperature=temperature, **kw)
-    return resp["choices"][0]["message"]["content"]  # type: ignore[index]
-
-
-def llm_complete(messages: list[dict], temperature: float = 0) -> str:
-    """Provider-agnostic completion with OpenRouter fallback.
-
-    Returns the assistant message content as a string.
-    """
-    return _call_with_fallback(settings.litellm_model, messages, temperature)
-
-
-def llm_complete_small(messages: list[dict], temperature: float = 0) -> str:
-    """Lightweight completion with OpenRouter fallback.
-
-    Uses the small/fast model for structured tasks like SoQL generation.
-    Falls back to :func:`llm_complete` when no small model is configured.
-    """
-    if not settings.litellm_small_model:
-        return llm_complete(messages, temperature=temperature)
-    return _call_with_fallback(settings.litellm_small_model, messages, temperature)
 
 
 # --- Prompts ---------------------------------------------------------------
@@ -138,17 +54,50 @@ SOQL_SYSTEM_PROMPT = (
     "Reglas importantes:\n"
     "- Usa field_name (snake_case) no el name de columna\n"
     "- Fechas en formato ISO: '2025-01-01T00:00:00.000'\n"
-    "- Texto es case-sensitive: los valores usan Title Case (ej: 'Medellín', 'Bogotá', 'Antioquia')\n"
+    "- Los valores de texto NO son consistentes entre datasets: unos guardan 'Medellín',\n"
+    "  otros 'MEDELLIN' (mayúsculas, sin tilde). Por eso, para filtrar por texto usa SIEMPRE\n"
+    "  coincidencia insensible a mayúsculas/tildes con upper(): p. ej.\n"
+    "  $where=upper(ciudad)=upper('Medellín')  o  $where=upper(departamento) like upper('%antioquia%').\n"
+    "  NUNCA asumas Title Case con un '=' exacto.\n"
     "- $limit por defecto 1000, máximo 50000\n"
     "- Agregaciones: $select=campo, count(*)&$group=campo\n"
     "- Top N: $order=campo DESC&$limit=N"
 )
 
 ANSWER_SYSTEM_PROMPT = (
-    "Eres DATIA, un asistente que explica datos de Colombia en español claro y simple.\n"
+    "Eres Manglar, un asistente que explica datos de Colombia en español claro y simple.\n"
     "Recibes una pregunta, el resultado de una consulta SoQL, y los metadatos del dataset.\n"
     "Respondes en español, en máximo 3 párrafos, con el dato principal primero.\n"
     "Menciona el dataset por nombre e incluye el número exacto si aplica."
+)
+
+JOIN_ANSWER_SYSTEM_PROMPT = (
+    "Eres Manglar, un asistente que explica datos de Colombia en español claro y simple.\n"
+    "Recibes una pregunta, el resultado de una consulta que cruza DOS datasets, y los "
+    "metadatos de ambos.\n"
+    "El resultado filtra el dataset SECUNDARIO a las llaves (NIT/documento) presentes en "
+    "el PRIMARIO.\n"
+    "Respondes en español, en máximo 3 párrafos, con el dato principal primero.\n"
+    "Menciona AMBOS datasets por nombre en la respuesta (primario y secundario).\n"
+    "Si el campo 'partial' es true, indica que el resultado es parcial y que los números "
+    "pueden estar subestimados."
+)
+
+JOIN_SYSTEM_PROMPT = (
+    "Eres un generador de consultas SoQL para Socrata (datos.gov.co) que produce UN JOIN "
+    "entre dos datasets.\n"
+    "Recibes una pregunta en español, y los esquemas de DOS datasets (primario y secundario).\n"
+    "Devuelves un único JSON con las claves:\n"
+    '  "primary_soql": SoQL para el dataset PRIMARIO. SOLO $select la columna llave '
+    "(join_key_primary). Fija $limit=50000. No incluyas otras columnas ni filtros.\n"
+    '  "partner_soql": SoQL para el dataset SECUNDARIO (filtrado a lo que la pregunta pide, '
+    "incluye la columna join_key_partner y las columnas relevantes para responder). "
+    "NO incluyas $limit (el sistema lo añade).\n"
+    '  "join_key_primary": el field_name de la columna del PRIMARIO que sirve de llave '
+    "(ej: documento_contratista)\n"
+    '  "join_key_partner": el field_name de la columna del SECUNDARIO que sirve de llave '
+    "(ej: documento_proveedor)\n"
+    "Reglas SoQL: Fechas ISO. Usa field_name no name. Devuelve SOLO el JSON, sin explicación."
 )
 
 
@@ -169,6 +118,15 @@ class AgentState(TypedDict):
     chart: dict | None
     sources: list[dict]
     step: str
+    is_join_question: bool
+    join_partner_id: str | None
+    join_key_primary: str | None
+    join_key_partner: str | None
+    partner_schema: dict | None
+    partner_soql: str | None
+    partner_query_result: dict | None
+    is_chitchat: bool
+    chitchat_answer_text: str
 
 
 # --- Helpers ---------------------------------------------------------------
@@ -184,44 +142,6 @@ def _load_hero_questions() -> list[dict]:
         return []
     data = yaml.safe_load(_HERO_YAML.read_text(encoding="utf-8")) or {}
     return data.get("hero_questions", [])
-
-
-def _hero_match(question: str) -> str | None:
-    """Check if the user's question closely matches a hero question.
-
-    Uses keyword overlap between the user question and each hero question's
-    canonical text.  If the overlap is strong enough (>= 3 meaningful words in
-    common) AND the hero question has a single expected dataset, return that
-    dataset ID.  This is the pragmatic hackathon fix: the Hero 10 questions
-    MUST resolve to the correct dataset for the demo.
-
-    Returns the expected dataset_id or None.
-    """
-    q = question.lower()
-    q_words = {w for w in re.split(r"[^a-záéíóúüñ]+", q) if len(w) >= 3}
-    if len(q_words) < 3:
-        return None
-
-    best_id: str | None = None
-    best_overlap = 0
-
-    for hero in _load_hero_questions():
-        datasets = hero.get("datasets") or []
-        # Only override for heroes with exactly one expected dataset
-        if len(datasets) != 1:
-            continue
-        hero_q = hero.get("question", "").lower()
-        hero_words = {w for w in re.split(r"[^a-záéíóúüñ]+", hero_q) if len(w) >= 3}
-        overlap = len(q_words & hero_words)
-        if overlap > best_overlap:
-            best_overlap = overlap
-            best_id = datasets[0]
-
-    # Require at least 3 shared meaningful words to consider it a match
-    if best_overlap >= 3 and best_id:
-        log.info("Hero match: overlap=%d -> %s", best_overlap, best_id)
-        return best_id
-    return None
 
 
 def _column_brief(schema: dict | None, max_cols: int = 30) -> str:
@@ -244,9 +164,18 @@ def _column_brief(schema: dict | None, max_cols: int = 30) -> str:
     return "\n".join(lines)
 
 
-def _few_shots_text(max_patterns: int = 3) -> str:
-    """Return a compact few-shot text block, limited to *max_patterns* entries."""
-    patterns = few_shots.load_patterns()[:max_patterns]
+def _few_shots_text(question: str = "", max_patterns: int = 6) -> str:
+    """Return a compact few-shot block, ranked by token overlap with *question*."""
+    patterns = few_shots.load_patterns()
+    if question:
+        q_tokens = set(re.findall(r"\w+", question.lower()))
+
+        def _overlap(p: dict) -> int:
+            p_tokens = set(re.findall(r"\w+", str(p.get("user_question", "")).lower()))
+            return len(q_tokens & p_tokens)
+
+        patterns = sorted(patterns, key=_overlap, reverse=True)
+    patterns = patterns[:max_patterns]
     return "\n".join(f"- Q: {p['user_question']}\n  SoQL: {p['soql']}" for p in patterns)
 
 
@@ -261,34 +190,170 @@ def _clean_soql(raw: str) -> str:
     return soql.strip().strip("`").strip()
 
 
-def _is_number(v: Any) -> bool:
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
+_JOIN_QUESTION_RE = re.compile(
+    r"que\s+ad[eé]m[aá]s"
+    r"|que\s+ambi[eé]n"
+    r"|que\s+cuentan\s+con"
+    r"|sancionad[aá]s?.*(?:contrat|salud)"
+    r"|contrat.*sancionad",
+    re.IGNORECASE,
+)
+
+
+def _detect_join_question(question: str) -> bool:
+    """Return True if the question looks like a cross-dataset join request.
+
+    Pure function — regex match on Spanish cues that signal the user wants
+    results from two datasets intersected by a shared key.
+    """
+    return _JOIN_QUESTION_RE.search(question) is not None
+
+
+def _resolve_secop_pair(question: str) -> tuple[str, str] | None:
+    """Detect the SECOP-Sancionados + SECOP-II-Contratos pair from a question.
+
+    Returns ``(sancionados_id, contratos_id)`` when both concepts are present,
+    else ``None``.  Uses the priority YAML so the IDs stay in one place.
+    """
+    from app.rag.catalog import _load_priority_datasets
+
+    q = question.lower()
+    sancionados_id: str | None = None
+    contratos_id: str | None = None
+    for ds in _load_priority_datasets():
+        hint = (ds.get("search_hint") or "").lower()
+        did = ds.get("id")
+        if not did:
+            continue
+        if "sancionad" in hint and sancionados_id is None:
+            sancionados_id = did
+        elif ("secop2 contratos" in hint or "secop ii contratos" in hint) and contratos_id is None:
+            contratos_id = did
+    if sancionados_id is None or contratos_id is None:
+        return None
+    if "sancionad" not in q:
+        return None
+    if "contrat" not in q and "secop" not in q:
+        return None
+    return (sancionados_id, contratos_id)
+
+
+def _find_join_neighbor(primary_id: str, label_hint: str = "") -> str | None:
+    """Pick a neighbor of ``primary_id`` from the dataset graph.
+
+    When ``label_hint`` is non-empty, prefer a neighbor whose label contains
+    the hint as a substring.  Otherwise return the highest-confidence neighbor.
+    Returns ``None`` when the graph has no neighbors for the primary dataset.
+    """
+    neighbors = T.graph_neighbors(primary_id)
+    if not neighbors:
+        return None
+    if label_hint:
+        hint = label_hint.lower()
+        for n in neighbors:
+            if hint in (n.get("label") or "").lower():
+                return n["dataset_id"]
+    return neighbors[0]["dataset_id"]
+
+
+# --- Chitchat / triage ------------------------------------------------------
+
+TRIAGE_SYSTEM_PROMPT = (
+    "Eres el enrutador de Manglar, un asistente de datos abiertos de Colombia "
+    "(datos.gov.co). Decide si el mensaje del usuario requiere CONSULTAR datos "
+    "públicos (cifras, estadísticas, datasets, contratos, salud, contratación, "
+    "etc.) o si es conversación general, un saludo, o una pregunta sobre quién "
+    "eres / qué puedes hacer. Responde SOLO con JSON válido, sin markdown, con "
+    'la forma {"needs_data": true|false, "answer": "..."}. Si needs_data es '
+    "false, en 'answer' escribe una respuesta breve, amable y útil en español "
+    "(si preguntan por tus capacidades, explica brevemente qué haces y da 2-3 "
+    "ejemplos de preguntas). Si needs_data es true, deja 'answer' como cadena "
+    "vacía."
+)
+
+
+CHITCHAT_ANSWER = (
+    "¡Hola! Soy Manglar, un asistente que te ayuda a explorar los datos abiertos de "
+    "Colombia publicados en datos.gov.co. Busco los datasets relevantes, genero "
+    "consultas automáticamente y te respondo con cifras exactas, fuentes citadas y, "
+    "cuando aplica, un gráfico.\n\n"
+    "Algunas preguntas que puedes hacerme:\n"
+    "- ¿Cuántos contratos públicos firmó Medellín en 2025 y cuáles son las top 5 empresas?\n"
+    "- ¿Qué datos abiertos existen sobre vacunación?\n"
+    "- ¿Cuál fue la TRM promedio del último mes comparada con el año anterior?\n"
+    "- ¿Cuántos beneficiarios de Familias en Acción hay por municipio en Antioquia?\n\n"
+    "¡Pregúntame lo que quieras saber sobre los datos públicos de Colombia!"
+)
 
 
 # --- Nodes ---------------------------------------------------------------
+
+
+def triage_node(state: AgentState) -> AgentState:
+    """Classify the question as chitchat/meta vs. a genuine data question.
+
+    Uses a single small-model LLM call that both classifies the message and
+    (for non-data messages) drafts the Spanish reply, so there is no
+    regex/keyword list to keep in sync with real usage. The safe default on
+    any exception, timeout, or unparsable response is the DATA path — we
+    never want to wrongly refuse a genuine data question.
+    """
+    messages = [
+        {"role": "system", "content": TRIAGE_SYSTEM_PROMPT},
+        {"role": "user", "content": state["question"]},
+    ]
+    try:
+        raw = llm_complete_small(messages, temperature=0)
+        parsed = _parse_join_llm_response(raw)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("triage LLM call failed, defaulting to data path: %s", exc)
+        parsed = None
+
+    if not parsed or "needs_data" not in parsed:
+        if parsed is not None:
+            log.warning("triage LLM parse failed, defaulting to data path: raw=%r", raw)
+        state["is_chitchat"] = False
+        state["chitchat_answer_text"] = ""
+    elif not parsed["needs_data"]:
+        state["is_chitchat"] = True
+        state["chitchat_answer_text"] = parsed.get("answer") or ""
+    else:
+        state["is_chitchat"] = False
+        state["chitchat_answer_text"] = ""
+
+    state["step"] = "triage"
+    return state
+
+
+def chitchat_answer_node(state: AgentState) -> AgentState:
+    """Instant Spanish answer for meta questions — no DB/LLM/chart.
+
+    Prefers the answer the triage LLM already drafted; falls back to the
+    canned ``CHITCHAT_ANSWER`` when the LLM left it empty (e.g. safe-default
+    path where triage wasn't actually the chitchat branch, or an LLM answer
+    that came back blank).
+    """
+    state["answer"] = state.get("chitchat_answer_text") or CHITCHAT_ANSWER
+    state["sources"] = []
+    state["chart"] = None
+    state["step"] = "answer"
+    return state
 
 
 def search_node(state: AgentState) -> AgentState:
     """Find candidate datasets via catalog RAG and pick the best one.
 
     Selection order:
-    1. **Hero override** — if the question keyword-matches a hero question with
-       a single expected dataset, use that dataset directly.  This is the
-       pragmatic hackathon fix for the demo.
-    2. **Priority override** — if the top result's score is below 0.5 AND the
+    1. **Priority override** — if the top result's score is below 0.5 AND the
        question keyword-matches a priority dataset, override with that match.
-    3. **Default** — pick the highest-scored result from RAG.
+    2. **Default** — pick the highest-scored result from RAG.
+
+    When the question looks like a cross-dataset join, the node also resolves
+    the partner dataset (SECOP pair via priority YAML, or graph neighbors).
     """
     results = T.search_catalog(state["question"])
     state["datasets"] = results
     state["step"] = "search"
-
-    # --- Hero override (highest priority) ----------------------------------
-    hero_id = _hero_match(state["question"])
-    if hero_id:
-        log.info("Hero override: using %s for question", hero_id)
-        state["dataset_id"] = hero_id
-        return state
 
     if not results:
         return state
@@ -312,6 +377,21 @@ def search_node(state: AgentState) -> AgentState:
 
     if not state.get("dataset_id"):
         state["dataset_id"] = chosen_id
+
+    # Join detection
+    state["is_join_question"] = _detect_join_question(state["question"])
+    if state["is_join_question"]:
+        pair = _resolve_secop_pair(state["question"])
+        if pair:
+            state["dataset_id"] = pair[0]
+            state["join_partner_id"] = pair[1]
+        else:
+            primary = state.get("dataset_id")
+            if primary:
+                state["join_partner_id"] = _find_join_neighbor(primary)
+            else:
+                state["join_partner_id"] = None
+
     return state
 
 
@@ -353,7 +433,7 @@ def _build_soql_messages(state: AgentState, *, correction: str | None = None) ->
     did = state.get("dataset_id")
     schema = state.get("schema") or {}
     col_text = _column_brief(schema)
-    few_shots_text = _few_shots_text()
+    few_shots_text = _few_shots_text(state["question"])
     messages: list[dict] = [
         {"role": "system", "content": SOQL_SYSTEM_PROMPT},
         {"role": "system", "content": f"Ejemplos SoQL:\n{few_shots_text}"},
@@ -471,9 +551,26 @@ def answer_node(state: AgentState) -> AgentState:
         (r.get("permalink") for r in datasets if r.get("id") == did),
         f"https://{domain}/d/{did}" if did else None,
     )
-    state["sources"] = [
+
+    sources: list[dict] = [
         {"name": schema.get("name", did or ""), "permalink": permalink, "soql": soql}
     ]
+    if state.get("is_join_question"):
+        partner_schema = state.get("partner_schema") or {}
+        partner_id = state.get("join_partner_id")
+        if partner_schema or partner_id:
+            partner_permalink = partner_schema.get("permalink") or next(
+                (r.get("permalink") for r in datasets if r.get("id") == partner_id),
+                f"https://{domain}/d/{partner_id}" if partner_id else None,
+            )
+            sources.append(
+                {
+                    "name": partner_schema.get("name", partner_id or ""),
+                    "permalink": partner_permalink,
+                    "soql": state.get("partner_soql") or "",
+                }
+            )
+    state["sources"] = sources
 
     if error and not rows:
         if not did:
@@ -498,22 +595,67 @@ def answer_node(state: AgentState) -> AgentState:
         return state
 
     summary_ctx = json.dumps(rows[:20], ensure_ascii=False, default=str)
+    is_join = state.get("is_join_question")
+    system_prompt = JOIN_ANSWER_SYSTEM_PROMPT if is_join else ANSWER_SYSTEM_PROMPT
+
+    total_rows = len(rows)
+    # For single-row aggregate results (count/sum/avg), extract the exact numeric
+    # values so the LLM echoes them verbatim instead of recomputing from a slice.
+    exact_values = None
+    if total_rows == 1 and rows[0]:
+        scalars = {k: v for k, v in rows[0].items() if _coerce_number(v) is not None}
+        if scalars:
+            exact_values = scalars
+
+    if is_join:
+        partner_schema = state.get("partner_schema") or {}
+        partner_id = state.get("join_partner_id")
+        user_content = (
+            f"Pregunta: {state['question']}\n"
+            f"Resultados (máx 20 filas): {summary_ctx}\n"
+            f"Dataset primario: {schema.get('name', did)}\n"
+            f"Dataset secundario: {partner_schema.get('name', partner_id)}\n"
+            f"Filas encontradas: {len(rows)}\n"
+            f"partial: {result.get('partial', False)}\n"
+            f"Total de filas: {total_rows}\n"
+        )
+        if exact_values is not None:
+            user_content += (
+                f"VALORES EXACTOS calculados desde el resultado completo "
+                f"(cópialos textualmente, NO los recalcules): "
+                f"{json.dumps(exact_values, ensure_ascii=False, default=str)}\n"
+            )
+    else:
+        user_content = (
+            f"Pregunta: {state['question']}\n"
+            f"Resultados (máx 20 filas): {summary_ctx}\n"
+            f"Dataset: {schema.get('name', did)}\n"
+            f"Total de filas: {total_rows}\n"
+        )
+        if exact_values is not None:
+            user_content += (
+                f"VALORES EXACTOS calculados desde el resultado completo "
+                f"(cópialos textualmente, NO los recalcules): "
+                f"{json.dumps(exact_values, ensure_ascii=False, default=str)}\n"
+            )
+
     messages: list[dict] = [
-        {"role": "system", "content": ANSWER_SYSTEM_PROMPT},
-        {
-            "role": "user",
-            "content": (
-                f"Pregunta: {state['question']}\n"
-                f"Resultados (máx 20 filas): {summary_ctx}\n"
-                f"Dataset: {schema.get('name', did)}"
-            ),
-        },
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content},
     ]
     try:
         answer = llm_complete(messages)
     except Exception as exc:  # noqa: BLE001
         log.exception("answer LLM call failed: %s", exc)
         answer = f"Encontré {len(rows)} filas pero no pude redactar la respuesta. (detalle: {exc})"
+
+    if result.get("partial"):
+        answer = (
+            f"⚠️ Resultado parcial: basado en las primeras {len(rows)} filas. "
+            "La consulta completa excede el límite operativo; "
+            "los números pueden estar subestimados.\n\n"
+        ) + answer
+
     state["answer"] = answer
 
     if rows and len(rows[0]) >= 2 and any(_is_number(v) for v in rows[0].values()):
@@ -524,7 +666,368 @@ def answer_node(state: AgentState) -> AgentState:
     return state
 
 
+def _normalize_key(value: object) -> str:
+    """Lowercase + strip a join-key value for case-insensitive comparison."""
+    if value is None:
+        return ""
+    s = str(value).strip().lower()
+    return re.sub(r"[^a-z0-9]", "", s)
+
+
+def _parse_join_llm_response(raw: str) -> dict | None:
+    """Extract the JSON block from the LLM join response.
+
+    Tries to parse the whole response first, then falls back to extracting the
+    first ``{...}`` block.  Returns ``None`` on failure.
+    """
+    raw = raw.strip()
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+    cleaned = re.sub(r"^```(?:json)?|```$", "", raw.strip(), flags=re.MULTILINE).strip()
+    match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
+def _strip_limit_offset(soql: str) -> str:
+    """Remove ``$limit`` and ``$offset`` parameters from a SoQL string."""
+    parts = soql.split("&")
+    filtered = [p for p in parts if not re.match(r"\s*\$(limit|offset)\s*=", p.strip())]
+    return "&".join(filtered)
+
+
+def _extract_where(soql: str) -> tuple[str, str]:
+    """Split a SoQL into (remaining_without_where_or_pagination, where_expression).
+
+    ``$limit`` / ``$offset`` are always stripped.  All ``$where`` fragments are
+    collected and joined with ``AND`` so the caller can append additional filters.
+    """
+    parts = soql.split("&")
+    where_exprs: list[str] = []
+    remaining: list[str] = []
+    for p in parts:
+        stripped = p.strip()
+        if stripped.startswith("$where="):
+            where_exprs.append(stripped[len("$where=") :])
+        elif not re.match(r"\s*\$(limit|offset)\s*=", stripped):
+            remaining.append(p)
+    return "&".join(remaining), " AND ".join(where_exprs)
+
+
+def _build_join_messages(state: AgentState, *, correction: str | None = None) -> list[dict]:
+    """Compose the messages asking the LLM to write (or fix) a join plan."""
+    primary_id = state.get("dataset_id")
+    partner_id = state.get("join_partner_id")
+    primary_schema = state.get("schema") or {}
+    partner_schema = state.get("partner_schema") or {}
+    primary_col_text = _column_brief(primary_schema)
+    partner_col_text = _column_brief(partner_schema)
+    messages: list[dict] = [
+        {"role": "system", "content": JOIN_SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": (
+                f"Pregunta: {state['question']}\n\n"
+                f"Dataset PRIMARIO ({primary_id}):\n{primary_col_text}\n\n"
+                f"Dataset SECUNDARIO ({partner_id}):\n{partner_col_text}"
+            ),
+        },
+    ]
+    if correction:
+        messages.append(
+            {
+                "role": "assistant",
+                "content": json.dumps(
+                    {
+                        "primary_soql": state.get("soql", ""),
+                        "partner_soql": state.get("partner_soql", ""),
+                        "join_key_primary": state.get("join_key_primary", ""),
+                        "join_key_partner": state.get("join_key_partner", ""),
+                    }
+                ),
+            }
+        )
+        messages.append(
+            {
+                "role": "user",
+                "content": (
+                    f"Esa consulta falló con este error: {correction}\n"
+                    "Corregila. Devuelve SOLO el JSON corregido."
+                ),
+            }
+        )
+    return messages
+
+
+def join_generate_node(state: AgentState) -> AgentState:
+    """LLM call only: produce the two SoQLs and join-key column names.
+
+    On retry the previous error is fed back into the prompt so the LLM can
+    repair the broken clause.  Does NOT execute any query — that is the job of
+    ``join_execute_node``.
+    """
+    primary_id = state.get("dataset_id")
+    partner_id = state.get("join_partner_id")
+    if not primary_id or not partner_id:
+        state["query_result"] = {
+            "rows": [],
+            "count": 0,
+            "error": "join_missing_dataset_ids",
+            "partial": False,
+        }
+        state["step"] = "join_generate"
+        return state
+
+    primary_schema = T.get_schema(primary_id)
+    partner_schema = T.get_schema(partner_id)
+    state["schema"] = primary_schema
+    state["partner_schema"] = partner_schema
+
+    correction = None
+    prev_result = state.get("query_result") or {}
+    if prev_result.get("error") and state.get("soql"):
+        correction = prev_result["error"]
+
+    messages = _build_join_messages(state, correction=correction)
+    try:
+        raw = llm_complete_small(messages, temperature=0)
+        parsed = _parse_join_llm_response(raw)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("join_generate LLM call failed: %s", exc)
+        parsed = None
+
+    if not parsed or not all(
+        k in parsed
+        for k in ("primary_soql", "partner_soql", "join_key_primary", "join_key_partner")
+    ):
+        log.warning("join_generate LLM parse failed, raw=%r", raw)
+        state["query_result"] = {
+            "rows": [],
+            "count": 0,
+            "error": "join_llm_parse_failed",
+            "partial": False,
+        }
+        state["partner_query_result"] = {
+            "rows": [],
+            "count": 0,
+            "error": "join_llm_parse_failed",
+        }
+        state["step"] = "join_generate"
+        return state
+
+    state["soql"] = parsed["primary_soql"]
+    state["partner_soql"] = parsed["partner_soql"]
+    state["join_key_primary"] = parsed["join_key_primary"]
+    state["join_key_partner"] = parsed["join_key_partner"]
+    state["query_result"] = None
+    state["step"] = "join_generate"
+    return state
+
+
+def join_execute_node(state: AgentState) -> AgentState:
+    """Paginate the primary dataset, then batch-filter the partner server-side.
+
+    Primary pagination uses ``$limit=50000`` / ``$offset`` and stops at the first
+    page that returns fewer rows (or at the 50 000-row hard cap, whichever comes
+    first).  The partner dataset is queried in batches of 100 primary keys via a
+    pushdown ``$where=<key> in (...)`` filter so the merge becomes "all partner
+    rows collected across batches" — no client-side intersection needed.
+    """
+    primary_id = state.get("dataset_id")
+    partner_id = state.get("join_partner_id")
+    primary_soql = state.get("soql") or ""
+    partner_soql = state.get("partner_soql") or ""
+    join_key_primary = state.get("join_key_primary") or ""
+    join_key_partner = state.get("join_key_partner") or ""
+
+    if (
+        not primary_id
+        or not partner_id
+        or not primary_soql
+        or not join_key_primary
+        or not join_key_partner
+    ):
+        state["query_result"] = {
+            "rows": [],
+            "count": 0,
+            "error": "join_missing_query_params",
+            "partial": False,
+        }
+        state["step"] = "join_execute"
+        return state
+
+    base_primary_soql = _strip_limit_offset(primary_soql)
+
+    primary_rows: list[dict] = []
+    partial = False
+    offset = 0
+
+    while len(primary_rows) < _SOQL_HARD_LIMIT:
+        page_soql = (
+            f"{base_primary_soql}&$limit={_SOQL_HARD_LIMIT}&$offset={offset}"
+            if base_primary_soql
+            else f"$limit={_SOQL_HARD_LIMIT}&$offset={offset}"
+        )
+        try:
+            page_result = T.query_dataset(primary_id, page_soql)
+        except Exception as exc:  # noqa: BLE001
+            state["query_result"] = {
+                "rows": [],
+                "count": 0,
+                "error": f"join_primary_error: {exc}",
+                "partial": False,
+            }
+            state["step"] = "join_execute"
+            return state
+
+        if page_result.get("error"):
+            state["query_result"] = {
+                "rows": [],
+                "count": 0,
+                "error": f"join_primary_error: {page_result['error']}",
+                "partial": False,
+            }
+            state["step"] = "join_execute"
+            return state
+
+        page_rows = page_result.get("rows") or []
+        primary_rows.extend(page_rows)
+
+        if len(page_rows) < _SOQL_HARD_LIMIT:
+            break
+
+        offset += _SOQL_HARD_LIMIT
+        if len(primary_rows) >= _SOQL_HARD_LIMIT:
+            partial = True
+            break
+
+    primary_rows = primary_rows[:_SOQL_HARD_LIMIT]
+
+    seen_keys: set[str] = set()
+    unique_keys: list[str] = []
+    for row in primary_rows:
+        k = _normalize_key(row.get(join_key_primary))
+        if k and k not in seen_keys:
+            seen_keys.add(k)
+            unique_keys.append(k)
+
+    if not unique_keys:
+        state["query_result"] = {
+            "rows": [],
+            "count": 0,
+            "error": None,
+            "partial": partial,
+        }
+        state["partner_query_result"] = {"rows": [], "count": 0, "error": None}
+        state["step"] = "join_execute"
+        return state
+
+    base_partner_soql, existing_where = _extract_where(partner_soql)
+    partner_rows: list[dict] = []
+    batch_size = 100
+
+    for i in range(0, len(unique_keys), batch_size):
+        batch_keys = unique_keys[i : i + batch_size]
+        keys_literal = ",".join(f"'{k}'" for k in batch_keys)
+        key_filter = f"{join_key_partner} in ({keys_literal})"
+        combined_where = f"({existing_where}) AND ({key_filter})" if existing_where else key_filter
+        if base_partner_soql:
+            batch_soql = f"{base_partner_soql}&$where={combined_where}&$limit={_SOQL_HARD_LIMIT}"
+        else:
+            batch_soql = f"$where={combined_where}&$limit={_SOQL_HARD_LIMIT}"
+
+        try:
+            batch_result = T.query_dataset(partner_id, batch_soql)
+        except Exception as exc:  # noqa: BLE001
+            state["query_result"] = {
+                "rows": [],
+                "count": 0,
+                "error": f"join_partner_error: {exc}",
+                "partial": partial,
+            }
+            state["step"] = "join_execute"
+            return state
+
+        if batch_result.get("error"):
+            state["query_result"] = {
+                "rows": [],
+                "count": 0,
+                "error": f"join_partner_error: {batch_result['error']}",
+                "partial": partial,
+            }
+            state["step"] = "join_execute"
+            return state
+
+        batch_rows = batch_result.get("rows") or []
+        partner_rows.extend(batch_rows)
+
+        if len(batch_rows) >= _SOQL_HARD_LIMIT:
+            partial = True
+
+    # Authoritative client-side re-filter: the server-side `in (...)` pushdown is
+    # a coarse filter; NIT/document formatting differs across datasets, so the
+    # real membership check must run on normalized keys.
+    partner_rows = [r for r in partner_rows if _normalize_key(r.get(join_key_partner)) in seen_keys]
+
+    state["partner_query_result"] = {
+        "rows": partner_rows,
+        "count": len(partner_rows),
+        "error": None,
+    }
+    state["query_result"] = {
+        "rows": partner_rows,
+        "count": len(partner_rows),
+        "error": None,
+        "partial": partial,
+    }
+    state["step"] = "join_execute"
+    return state
+
+
+def join_check_node(state: AgentState) -> AgentState:
+    """Bump ``retry_count`` when the join pipeline produced a fixable error."""
+    result = state.get("query_result") or {}
+    if result.get("error"):
+        state["retry_count"] = state.get("retry_count", 0) + 1
+    state["step"] = "join_check"
+    return state
+
+
+def join_query_node(state: AgentState) -> AgentState:
+    """Backward-compatible wrapper: generate + execute in one call.
+
+    Kept so existing callers (and tests) that invoke ``join_query_node`` directly
+    still work.  The graph itself uses the split nodes.
+    """
+    state = join_generate_node(state)
+    qr = state.get("query_result") or {}
+    if qr.get("error"):
+        return state
+    state = join_execute_node(state)
+    return state
+
+
 # --- Routing ---------------------------------------------------------------
+
+
+def route_after_triage(state: AgentState) -> str:
+    """Route chitchat/meta questions to the canned answer, else into search."""
+    if state.get("is_chitchat"):
+        return "chitchat_answer"
+    return "search"
+
+
+def route_after_search(state: AgentState) -> str:
+    """Route to ``join_generate`` for cross-dataset joins, else ``schema``."""
+    if state.get("is_join_question") and state.get("join_partner_id"):
+        return "join_generate"
+    return "schema"
 
 
 def route_after_check(state: AgentState) -> str:
@@ -544,6 +1047,18 @@ def route_after_check(state: AgentState) -> str:
     return "answer"
 
 
+def route_after_join_check(state: AgentState) -> str:
+    """On a fixable join error (within retry budget) retry ``join_generate``; else answer."""
+    if not state.get("dataset_id"):
+        return "answer"
+    result = state.get("query_result") or {}
+    error = result.get("error")
+    retry = state.get("retry_count", 0)
+    if error and retry <= MAX_RETRIES:
+        return "join_generate"
+    return "answer"
+
+
 # --- Question cache ---------------------------------------------------------
 
 # Simple in-memory cache: question -> final AgentState.
@@ -559,15 +1074,30 @@ _question_cache: dict[str, AgentState] = {}
 def build_agent():
     """Construct and compile the LangGraph agent state graph (cached)."""
     g = StateGraph(AgentState)
+    g.add_node("triage", triage_node)
+    g.add_node("chitchat_answer", chitchat_answer_node)
     g.add_node("search", search_node)
     g.add_node("schema", schema_node)
     g.add_node("generate_soql", generate_soql_node)
     g.add_node("execute_query", execute_query_node)
     g.add_node("check_result", check_result_node)
+    g.add_node("join_generate", join_generate_node)
+    g.add_node("join_execute", join_execute_node)
+    g.add_node("join_check", join_check_node)
     g.add_node("answer", answer_node)
 
-    g.set_entry_point("search")
-    g.add_edge("search", "schema")
+    g.set_entry_point("triage")
+    g.add_conditional_edges(
+        "triage",
+        route_after_triage,
+        {"chitchat_answer": "chitchat_answer", "search": "search"},
+    )
+    g.add_edge("chitchat_answer", END)
+    g.add_conditional_edges(
+        "search",
+        route_after_search,
+        {"schema": "schema", "join_generate": "join_generate"},
+    )
     g.add_edge("schema", "generate_soql")
     g.add_edge("generate_soql", "execute_query")
     g.add_edge("execute_query", "check_result")
@@ -575,6 +1105,13 @@ def build_agent():
         "check_result",
         route_after_check,
         {"generate_soql": "generate_soql", "answer": "answer"},
+    )
+    g.add_edge("join_generate", "join_execute")
+    g.add_edge("join_execute", "join_check")
+    g.add_conditional_edges(
+        "join_check",
+        route_after_join_check,
+        {"join_generate": "join_generate", "answer": "answer"},
     )
     g.add_edge("answer", END)
     return g.compile()
@@ -608,6 +1145,15 @@ def run_agent(question: str) -> AgentState:
         "chart": None,
         "sources": [],
         "step": "search",
+        "is_join_question": False,
+        "join_partner_id": None,
+        "join_key_primary": None,
+        "join_key_partner": None,
+        "partner_schema": None,
+        "partner_soql": None,
+        "partner_query_result": None,
+        "is_chitchat": False,
+        "chitchat_answer_text": "",
     }
     result = agent.invoke(initial_state)
 

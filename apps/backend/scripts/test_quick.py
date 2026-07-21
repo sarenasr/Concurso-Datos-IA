@@ -1,4 +1,4 @@
-"""Quick 3-question smoke test for DATIA agent."""
+"""Quick 3-question smoke test for Manglar agent."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ QUESTIONS = [
 ]
 
 print("=" * 80)
-print("DATIA Quick Smoke Test (3 questions)")
+print("Manglar Quick Smoke Test (3 questions)")
 print("=" * 80)
 
 for i, (q, expected) in enumerate(QUESTIONS, 1):

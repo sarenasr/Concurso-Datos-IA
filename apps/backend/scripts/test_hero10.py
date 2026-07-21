@@ -36,7 +36,7 @@ def _truncate(text: str | None, max_len: int = 100) -> str:
 def main() -> None:
     """Run all hero questions and print a summary table."""
     print("=" * 100)
-    print("DATIA Hero-10 Test Suite")
+    print("Manglar Hero-10 Test Suite")
     print("=" * 100)
 
     # Import here so module-level errors show before timing starts

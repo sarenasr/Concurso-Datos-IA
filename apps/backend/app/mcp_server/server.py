@@ -19,7 +19,7 @@ from app.agents.tools import (
     search_catalog,
 )
 
-mcp = FastMCP("DATIA")
+mcp = FastMCP("Manglar")
 
 
 @mcp.tool()
@@ -50,9 +50,20 @@ def graph_neighbors_tool(dataset_id: str) -> list[dict]:
 
 
 @mcp.tool()
-def make_chart_tool(data: list[dict], intent: str = "") -> dict:
-    """Build a Vega-Lite spec from tabular data using heuristic mark selection."""
-    return make_chart(data, intent=intent)
+def make_chart_tool(
+    data: list[dict],
+    title: str = "",
+    chart_type: str = "auto",
+) -> dict:
+    """Build a Vega-Lite spec from tabular data.
+
+    Args:
+        data: rows as a list of flat dicts (all rows share the same keys).
+        title: optional chart title rendered into the spec.
+        chart_type: ``"auto"`` (default) picks the mark heuristically; pass
+            ``"bar"``, ``"line"``, or ``"table"`` to force one.
+    """
+    return make_chart(data, title=title, chart_type=chart_type)
 
 
 if __name__ == "__main__":
