@@ -4,6 +4,25 @@ import { useEffect, useRef, useState, useMemo } from "react";
 import vegaEmbed from "vega-embed";
 import { AlertCircle, Table2, Loader2 } from "lucide-react";
 
+const MANGLAR_CHART_CONFIG = {
+  background: "transparent",
+  range: {
+    category: ["#1b3f92", "#6fbb79", "#559bc5", "#69bba6", "#68bdbc"],
+    ramp: ["#1b3f92", "#559bc5", "#68bdbc", "#69bba6", "#6fbb79"],
+    diverging: ["#c81e3a", "#f4f7fb", "#1b3f92"],
+  },
+  axis: {
+    labelColor: "#55637a",
+    titleColor: "#55637a",
+    labelFontSize: 12,
+    gridColor: "#dde5ef",
+    domainColor: "#dde5ef",
+    tickColor: "#dde5ef",
+  },
+  legend: { labelColor: "#55637a", titleColor: "#55637a", labelFontSize: 12 },
+  view: { stroke: null },
+} as const;
+
 export function VegaChart({ spec }: { spec: Record<string, unknown> }) {
   const ref = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
@@ -14,7 +33,11 @@ export function VegaChart({ spec }: { spec: Record<string, unknown> }) {
     setError(null);
     setLoading(true);
 
-    const result = vegaEmbed(ref.current, spec as never, {
+    const brandedSpec = {
+      ...spec,
+      config: { ...MANGLAR_CHART_CONFIG, ...((spec.config as object) ?? {}) },
+    };
+    const result = vegaEmbed(ref.current, brandedSpec as never, {
       actions: false,
       renderer: "svg",
     });
