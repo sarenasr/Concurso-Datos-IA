@@ -12,7 +12,7 @@ export function LoadingLogo({
   return (
     // eslint-disable-next-line @next/next/no-img-element
     <img
-      src="/logo-loading.webp"
+      src="/brand/manglar-isotipo.png"
       alt={alt}
       width={size}
       height={size}

@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, useCallback, memo, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import dynamic from "next/dynamic";
 import { Button } from "@/components/ui/button";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { SourcesCard } from "@/components/sources-card";
 import { streamChat, type Source, type ChatEvent } from "@/lib/api";
 import {
@@ -17,6 +17,7 @@ import {
   MessageCircle,
   AlertCircle,
 } from "lucide-react";
+import { LoadingLogo } from "@/components/loading-logo";
 
 const VegaChart = dynamic(
   () => import("@/components/vega-chart").then((m) => m.VegaChart),
@@ -79,23 +80,6 @@ const EXAMPLES = [
 ];
 
 /* ------------------------------------------------------------------ */
-/*  Thinking indicator                                                 */
-/* ------------------------------------------------------------------ */
-
-function ThinkingIndicator() {
-  return (
-    <div className="flex items-center gap-2.5 text-sm font-medium text-muted-foreground">
-      <span>DATIA está pensando</span>
-      <span className="flex gap-1">
-        <span className="thinking-dot h-2 w-2 rounded-full bg-colombia-yellow" />
-        <span className="thinking-dot h-2 w-2 rounded-full bg-colombia-yellow" />
-        <span className="thinking-dot h-2 w-2 rounded-full bg-colombia-yellow" />
-      </span>
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ */
 /*  SoQL Block                                                         */
 /* ------------------------------------------------------------------ */
 
@@ -114,10 +98,10 @@ const SoQLBlock = memo(function SoQLBlock({
         onClick={() => setOpen(!open)}
         className="flex w-full items-center gap-2 bg-gray-900 px-3 py-2.5 text-left text-xs font-medium text-gray-300 hover:text-white transition-colors"
       >
-        <Code2 className="h-3.5 w-3.5 text-colombia-yellow shrink-0" />
+        <Code2 className="h-3.5 w-3.5 text-manglar-marea shrink-0" />
         <span className="text-gray-400">Consulta SoQL</span>
         {dataset && (
-          <span className="rounded bg-colombia-yellow/15 px-1.5 py-0.5 text-colombia-yellow font-mono text-[10px] border border-colombia-yellow/20">
+          <span className="rounded bg-manglar-marea/15 px-1.5 py-0.5 text-manglar-marea font-mono text-[10px] border border-manglar-marea/20">
             {dataset}
           </span>
         )}
@@ -164,17 +148,24 @@ const AssistantBubble = memo(function AssistantBubble({
     <div className="space-y-1">
       {msg.thinking && (
         <p className="text-sm italic text-muted-foreground">
-          <Sparkles className="mr-1 inline h-3 w-3 text-colombia-yellow" />
+          <Sparkles className="mr-1 inline h-3 w-3 text-manglar-marea" />
           {msg.thinking}
         </p>
       )}
 
-      {msg.streaming && !msg.answer && !hasContent && <ThinkingIndicator />}
+      {msg.streaming && !msg.answer && !hasContent && (
+        <div className="flex flex-col items-center gap-2 py-2">
+          <LoadingLogo size={48} />
+          <span className="text-sm font-medium text-muted-foreground">
+            Analizando datos abiertos… esto puede tomar un momento.
+          </span>
+        </div>
+      )}
 
       {msg.query && <SoQLBlock query={msg.query} dataset={msg.dataset} />}
 
       {msg.answer && (
-        <div className="prose prose-sm mt-2 max-w-none dark:prose-invert prose-p:leading-relaxed prose-pre:bg-muted prose-pre:text-foreground prose-headings:text-foreground prose-a:text-colombia-blue">
+        <div className="prose prose-sm mt-2 max-w-none dark:prose-invert prose-p:leading-relaxed prose-pre:bg-muted prose-pre:text-foreground prose-headings:text-foreground prose-a:text-primary">
           {renderedAnswer}
         </div>
       )}
@@ -377,15 +368,15 @@ export function Chat({ compact = false }: { compact?: boolean } = {}) {
               <div
                 className={
                   compact
-                    ? "mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-colombia-yellow/15 ring-2 ring-colombia-yellow/20"
-                    : "mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-colombia-yellow/15 ring-2 ring-colombia-yellow/20"
+                    ? "mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-manglar-marea/15 ring-2 ring-manglar-marea/20"
+                    : "mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-manglar-marea/15 ring-2 ring-manglar-marea/20"
                 }
               >
                 <MessageCircle
                   className={
                     compact
-                      ? "h-6 w-6 text-colombia-yellow"
-                      : "h-10 w-10 text-colombia-yellow"
+                      ? "h-6 w-6 text-manglar-marea"
+                      : "h-10 w-10 text-manglar-marea"
                   }
                   strokeWidth={1.75}
                 />
@@ -423,8 +414,8 @@ export function Chat({ compact = false }: { compact?: boolean } = {}) {
                     onClick={() => send(q)}
                     className={
                       compact
-                        ? "rounded-full border border-border bg-card px-3 py-1.5 text-xs text-foreground shadow-sm transition-all duration-200 hover:border-colombia-yellow hover:bg-colombia-yellow/10 hover:shadow-md hover:shadow-colombia-yellow/5 active:scale-[0.98]"
-                        : "rounded-full border border-border bg-card px-4 py-2.5 text-sm text-foreground shadow-sm transition-all duration-200 hover:border-colombia-yellow hover:bg-colombia-yellow/10 hover:shadow-md hover:shadow-colombia-yellow/5 active:scale-[0.98]"
+                        ? "rounded-full border border-border bg-card px-3 py-1.5 text-xs text-foreground shadow-sm transition-all duration-200 hover:border-manglar-marea hover:bg-manglar-marea/10 hover:shadow-md hover:shadow-manglar-marea/5 active:scale-[0.98]"
+                        : "rounded-full border border-border bg-card px-4 py-2.5 text-sm text-foreground shadow-sm transition-all duration-200 hover:border-manglar-marea hover:bg-manglar-marea/10 hover:shadow-md hover:shadow-manglar-marea/5 active:scale-[0.98]"
                     }
                   >
                     {q}
@@ -442,15 +433,16 @@ export function Chat({ compact = false }: { compact?: boolean } = {}) {
                   }`}
                 >
                   {msg.role === "assistant" && (
-                    <Avatar className="mt-0.5 h-8 w-8 shrink-0 border-2 border-colombia-yellow/30">
-                      <AvatarFallback className="bg-colombia-yellow/15 text-colombia-yellow font-bold text-xs">
-                        DA
+                    <Avatar className="mt-0.5 h-8 w-8 shrink-0 border-2 border-manglar-marea/30">
+                      <AvatarImage src="/brand/manglar-isotipo.png" alt="Manglar" />
+                      <AvatarFallback className="bg-muted text-muted-foreground font-bold text-xs">
+                        M
                       </AvatarFallback>
                     </Avatar>
                   )}
                   {msg.role === "user" ? (
                     <div className="flex max-w-[85%] items-end gap-2">
-                      <div className="rounded-2xl rounded-br-sm bg-colombia-blue px-4 py-2.5 text-sm text-white shadow-sm">
+                      <div className="rounded-2xl rounded-br-sm bg-primary px-4 py-2.5 text-sm text-primary-foreground shadow-sm">
                         {msg.content}
                       </div>
                       <Avatar className="h-8 w-8 shrink-0">
@@ -488,7 +480,7 @@ export function Chat({ compact = false }: { compact?: boolean } = {}) {
             placeholder="Pregunta sobre los datos de Colombia..."
             disabled={loading}
             rows={1}
-            className="flex-1 resize-none rounded-xl border border-border bg-muted/50 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-colombia-yellow/40 focus:border-colombia-yellow/40 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+            className="flex-1 resize-none rounded-xl border border-border bg-muted/50 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-manglar-marea/40 focus:border-manglar-marea/40 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
           />
           {loading ? (
             <Button
@@ -505,7 +497,7 @@ export function Chat({ compact = false }: { compact?: boolean } = {}) {
               onClick={() => send()}
               disabled={!input.trim()}
               size="icon"
-              className="h-11 w-11 shrink-0 rounded-xl bg-colombia-yellow text-accent-foreground shadow-sm hover:bg-colombia-yellow/90 disabled:opacity-40 transition-all"
+              className="h-11 w-11 shrink-0 rounded-xl bg-primary text-primary-foreground shadow-sm hover:bg-primary/90 disabled:opacity-40 transition-all"
               aria-label="Enviar"
             >
               <Send className="h-4 w-4" />

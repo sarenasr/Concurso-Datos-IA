@@ -28,10 +28,10 @@ const SourceItem = memo(function SourceItem({ source, index }: { source: Source;
   const datasetId = extractDatasetId(source.permalink);
 
   return (
-    <Card className="border-colombia-blue/15 bg-colombia-blue/[0.03] shadow-sm">
+    <Card className="border-primary/15 bg-primary/[0.03] shadow-sm">
       <CardHeader className="flex flex-row items-center gap-2.5 pb-2 px-4 pt-3">
-        <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-colombia-blue/10">
-          <Database className="h-3.5 w-3.5 text-colombia-blue" />
+        <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/10">
+          <Database className="h-3.5 w-3.5 text-primary" />
         </div>
         <div className="flex-1 min-w-0">
           <CardTitle className="text-sm font-semibold leading-tight text-foreground">
@@ -46,14 +46,14 @@ const SourceItem = memo(function SourceItem({ source, index }: { source: Source;
       </CardHeader>
       <CardContent className="space-y-2.5 px-4 pb-3 pt-0">
         <div className="flex flex-wrap gap-2">
-          <Button asChild variant="outline" size="sm" className="h-7 text-xs border-colombia-blue/20 hover:bg-colombia-blue/10 hover:text-colombia-blue">
+          <Button asChild variant="outline" size="sm" className="h-7 rounded-full text-xs bg-accent text-accent-foreground border-transparent hover:bg-accent/80 hover:text-accent-foreground">
             <a href={source.permalink} target="_blank" rel="noopener noreferrer">
               <ExternalLink className="mr-1 h-3 w-3" />
               Ver dataset
             </a>
           </Button>
           {source.soql && (
-            <Button asChild variant="secondary" size="sm" className="h-7 text-xs">
+            <Button asChild variant="secondary" size="sm" className="h-7 rounded-full text-xs bg-accent text-accent-foreground border-transparent hover:bg-accent/80 hover:text-accent-foreground">
               <a
                 href={soqlPermalink(datasetId, source.soql)}
                 target="_blank"
