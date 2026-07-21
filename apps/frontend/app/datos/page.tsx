@@ -1,6 +1,6 @@
 "use client";
 
-import { DatiaBubble } from "@/components/datia-bubble";
+import { ManglarBubble } from "@/components/manglar-bubble";
 import { Search } from "lucide-react";
 
 const SECTORS = [
@@ -126,7 +126,7 @@ export default function DatosPage() {
         Ministerio TIC · Gobierno de Colombia
       </footer>
 
-      <DatiaBubble />
+      <ManglarBubble />
     </div>
   );
 }

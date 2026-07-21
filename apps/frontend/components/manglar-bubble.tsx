@@ -2,9 +2,10 @@
 
 import { useState, useRef, useEffect } from "react";
 import { Chat } from "@/components/chat";
-import { MessageCircle, X, Database } from "lucide-react";
+import { MessageCircle, X } from "lucide-react";
+import Image from "next/image";
 
-export function DatiaBubble() {
+export function ManglarBubble() {
   const [open, setOpen] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -24,7 +25,7 @@ export function DatiaBubble() {
       {open && (
         <div
           ref={panelRef}
-          className="datia-panel-enter absolute bottom-20 right-0 flex w-[380px] flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl shadow-black/25 sm:w-[420px]"
+          className="manglar-panel-enter absolute bottom-20 right-0 flex w-[380px] flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl shadow-black/25 sm:w-[420px]"
           style={
             {
               height: 520,
@@ -39,15 +40,13 @@ export function DatiaBubble() {
             } as React.CSSProperties
           }
         >
-          <div className="flex shrink-0 items-center gap-3 border-b border-yellow-300/50 bg-colombia-yellow px-4 py-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-white/90 shadow-sm">
-              <Database className="h-4 w-4 text-colombia-blue" strokeWidth={2.25} />
-            </div>
+          <div className="flex shrink-0 items-center gap-3 border-b border-border/60 bg-primary px-4 py-3">
+            <Image src="/brand/manglar-isotipo.png" alt="" width={28} height={28} />
             <div className="flex flex-1 flex-col">
-              <span className="text-sm font-bold text-gray-900 leading-tight">
-                DATIA
+              <span className="text-sm font-bold text-primary-foreground leading-tight">
+                Manglar
               </span>
-              <span className="text-[10px] text-gray-700 leading-tight font-medium">
+              <span className="text-[10px] text-primary-foreground/70 leading-tight font-medium">
                 Habla con los datos
               </span>
             </div>
@@ -67,12 +66,12 @@ export function DatiaBubble() {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className={`datia-bubble-pulse flex h-16 w-16 items-center justify-center rounded-full border-4 border-white transition-all duration-200 hover:scale-105 active:scale-95 ${
+        className={`manglar-bubble-pulse flex h-16 w-16 items-center justify-center rounded-full border-4 border-white transition-all duration-200 hover:scale-105 active:scale-95 ${
           open
-            ? "datia-bubble-idle bg-white shadow-lg shadow-black/20 text-colombia-blue"
-            : "bg-colombia-yellow text-gray-900"
+            ? "manglar-bubble-idle bg-white shadow-lg shadow-black/20 text-primary"
+            : "bg-primary text-primary-foreground"
         }`}
-        aria-label={open ? "Cerrar chat DATIA" : "Abrir chat DATIA"}
+        aria-label={open ? "Cerrar chat Manglar" : "Abrir chat Manglar"}
       >
         {open ? (
           <X className="h-7 w-7" strokeWidth={2.5} />
