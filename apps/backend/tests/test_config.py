@@ -20,7 +20,9 @@ def test_cors_origins_default_is_two_element_list() -> None:
     s = _fresh()
     assert s.cors_origins_list == [
         "http://localhost:3000",
+        "https://concurso-datos-ia.vercel.app",
         "https://concurso-datos-bc75r6uwk-sarenasrs-projects.vercel.app",
+        "https://concurso-datos-ia-git-main-sarenasrs-projects.vercel.app",
     ]
 
 
