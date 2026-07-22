@@ -485,11 +485,19 @@ def search_node(state: AgentState) -> AgentState:
     state["step"] = "search"
 
     if not results:
+        log.info("search_node: no results from catalog for query=%r", state["question"][:80])
         return state
+
+    top_results_preview = [
+        (r.get("id"), r.get("name", "")[:50], f"{r.get('score', 0):.4f}") for r in results[:5]
+    ]
+    log.info("search_node: catalog returned top-5: %s", top_results_preview)
+    log.info("search_node: query=%r", state["question"][:120])
 
     # Default: pick the highest-scored result
     best = results[0]
     chosen_id = best.get("id")
+    chosen_name = best.get("name", "")
     chosen_score = float(best.get("score", 0.0))
 
     # Priority override: if top score is low, check keyword matches
@@ -498,10 +506,11 @@ def search_node(state: AgentState) -> AgentState:
         priority_match = _find_priority_keyword_override(state["question"], results)
         if priority_match:
             log.info(
-                "Priority override: %s -> %s (top score was %.3f)",
+                "Priority override: default=%s (%s, score=%.4f) -> forced=%s",
                 chosen_id,
-                priority_match,
+                chosen_name[:50],
                 chosen_score,
+                priority_match,
             )
             chosen_id = priority_match
 
@@ -516,9 +525,11 @@ def search_node(state: AgentState) -> AgentState:
             and chosen_score < _MIN_CONFIDENT_SCORE
             and not state["is_join_question"]
         ):
-            # Honest low-confidence fallback: refuse to commit to a weak match.
-            # answer_node's `dataset_id is None` branch will suggest alternatives
-            # from `state["datasets"]` instead of querying an irrelevant dataset.
+            log.info(
+                "search_node: low-confidence (score=%.4f < %.4f), leaving dataset_id=None",
+                chosen_score,
+                _MIN_CONFIDENT_SCORE,
+            )
             state["dataset_id"] = None
         else:
             state["dataset_id"] = chosen_id
@@ -528,13 +539,29 @@ def search_node(state: AgentState) -> AgentState:
         if pair:
             state["dataset_id"] = pair[0]
             state["join_partner_id"] = pair[1]
+            log.info(
+                "search_node: join question, resolved SECOP pair: primary=%s partner=%s",
+                pair[0],
+                pair[1],
+            )
         else:
             primary = state.get("dataset_id")
             if primary:
                 state["join_partner_id"] = _find_join_neighbor(primary)
+                log.info(
+                    "search_node: join question, graph neighbor for %s: %s",
+                    primary,
+                    state["join_partner_id"],
+                )
             else:
                 state["join_partner_id"] = None
 
+    log.info(
+        "search_node: final dataset_id=%s (score=%.4f, priority_override=%s)",
+        state.get("dataset_id"),
+        chosen_score,
+        priority_match is not None,
+    )
     return state
 
 

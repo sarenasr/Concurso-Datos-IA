@@ -288,7 +288,25 @@ def search_catalog(
 
     text_rows = _keyword_search(sb, query, k * 4)
 
+    vector_preview = [
+        (r.get("id"), r.get("name", "")[:50], f"{r.get('score', 0):.4f}")
+        for r in vector_rows[:5]
+        if r.get("score") is not None
+    ]
+    text_preview = [
+        (r.get("id"), r.get("name", "")[:50], f"{r.get('text_score', 0):.4f}")
+        for r in text_rows[:5]
+        if r.get("text_score") is not None
+    ]
+    log.info("Vector leg top-5: %s", vector_preview)
+    log.info("Keyword leg top-5: %s", text_preview)
+
     fused = _fuse_results(vector_rows, text_rows)
+
+    fused_preview = [
+        (r.get("id"), r.get("name", "")[:50], f"{r.get('score', 0):.4f}") for r in fused[:5]
+    ]
+    log.info("After fusion top-5: %s", fused_preview)
 
     fused = _apply_popularity_prior(fused)
 
@@ -296,7 +314,17 @@ def search_catalog(
 
     fused.sort(key=lambda r: r["score"], reverse=True)
 
+    boosted_preview = [
+        (r.get("id"), r.get("name", "")[:50], f"{r.get('score', 0):.4f}") for r in fused[:5]
+    ]
+    log.info("After priority boost top-5: %s", boosted_preview)
+
     fused = _priority_fallback(fused, query, k)
+
+    final_preview = [
+        (r.get("id"), r.get("name", "")[:50], f"{r.get('score', 0):.4f}") for r in fused[:k]
+    ]
+    log.info("Final results top-%d: %s", k, final_preview)
 
     if settings.enable_reranker:
         from app.rag.reranker import rerank_datasets
@@ -436,6 +464,7 @@ def _priority_fallback(rows: list[dict], query: str, k: int) -> list[dict]:
 
     best = matches[0]
     best_id = best["id"]
+    best_name = best.get("name", best_id)
 
     top = rows[0] if rows else None
     if (
@@ -447,13 +476,28 @@ def _priority_fallback(rows: list[dict], query: str, k: int) -> list[dict]:
 
     existing = next((r for r in rows if r.get("id") == best_id), None)
     if existing:
+        old_score = float(existing.get("score", 0.0))
         existing["score"] = max(
-            float(existing.get("score", 0.0)) + _PRIORITY_BOOST_ADD,
+            old_score + _PRIORITY_BOOST_ADD,
             _PRIORITY_FALLBACK_SCORE,
+        )
+        log.info(
+            "Priority fallback: boosted %s (%s) from %.4f to %.4f (was #%d, now #1)",
+            best_id,
+            best_name,
+            old_score,
+            existing["score"],
+            next((i for i, r in enumerate(rows) if r.get("id") == best_id), -1) + 1,
         )
         rows.sort(key=lambda r: r["score"], reverse=True)
         return rows
 
+    log.info(
+        "Priority fallback: injected %s (%s) as #1 with score %.4f (was not in top results)",
+        best_id,
+        best_name,
+        _PRIORITY_FALLBACK_SCORE,
+    )
     injected = {
         "id": best_id,
         "name": best.get("name", ""),
