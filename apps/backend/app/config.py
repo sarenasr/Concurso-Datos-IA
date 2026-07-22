@@ -69,7 +69,9 @@ class Settings(BaseSettings):
     def _split_cors_origins(cls, v):
         if isinstance(v, str):
             return [s.strip() for s in v.split(",") if s.strip()]
-        return v
+        if isinstance(v, (list, tuple)):
+            return v
+        return ["http://localhost:3000"]
 
     @property
     def litellm_api_key_resolved(self) -> str:
