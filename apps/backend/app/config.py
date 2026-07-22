@@ -61,7 +61,7 @@ class Settings(BaseSettings):
     rerank_max_candidates: int = 8
     cors_origins: list[str] = [
         "http://localhost:3000",
-        "https://concurso-datos-ia.vercel.app",
+        "https://concurso-datos-bc75r6uwk-sarenasrs-projects.vercel.app",
     ]
 
     @field_validator("cors_origins", mode="before")
