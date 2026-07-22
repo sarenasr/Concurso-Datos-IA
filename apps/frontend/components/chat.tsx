@@ -152,7 +152,7 @@ const AssistantBubble = memo(function AssistantBubble({
         </p>
       )}
 
-      {msg.streaming && !msg.answer && !hasContent && (
+      {msg.streaming && !msg.answer && (
         <div className="flex flex-col items-center gap-2 py-2">
           <LoadingLogo size={48} />
           <span className="text-sm font-medium text-muted-foreground">
