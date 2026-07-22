@@ -18,6 +18,7 @@ from unittest.mock import patch
 from app.agents.graph import (
     CHITCHAT_ANSWER,
     chitchat_answer_node,
+    clarification_answer_node,
     route_after_triage,
     triage_node,
 )
@@ -47,6 +48,17 @@ def test_triage_node_data_question() -> None:
     assert result["is_chitchat"] is False
     assert result["chitchat_answer_text"] == ""
     assert result["step"] == "triage"
+
+
+def test_triage_node_missing_municipality_skips_llm_and_requests_context() -> None:
+    state = {"question": "Â¿CuÃ¡ntos casos hubo en mi municipio la Ãºltima semana?"}
+    with patch(_PATCH_TARGET) as mock_llm:
+        result = triage_node(state)
+
+    mock_llm.assert_not_called()
+    assert result["needs_clarification"] is True
+    assert "municipio" in result["clarification_question"].lower()
+    assert route_after_triage(result) == "clarification_answer"
 
 
 def test_triage_node_llm_raises_defaults_to_data() -> None:
@@ -87,6 +99,10 @@ def test_route_after_triage_data_question() -> None:
     assert route_after_triage({"is_chitchat": False}) == "search"
 
 
+def test_route_after_triage_clarification() -> None:
+    assert route_after_triage({"needs_clarification": True}) == "clarification_answer"
+
+
 # --- chitchat_answer_node -----------------------------------------------
 
 
@@ -117,6 +133,15 @@ def test_chitchat_answer_node_falls_back_to_canned_when_missing() -> None:
     assert result["step"] == "answer"
 
 
+def test_clarification_answer_node_returns_question_without_sources() -> None:
+    state = {"clarification_question": "Â¿De quÃ© municipio quieres consultar los datos?"}
+    result = clarification_answer_node(state)
+    assert result["answer"] == state["clarification_question"]
+    assert result["sources"] == []
+    assert result["chart"] is None
+    assert result["step"] == "answer"
+
+
 # --- End-to-end: no data I/O on the chitchat fast path -----------------------
 
 
@@ -138,3 +163,23 @@ def test_run_agent_chitchat_fast_path_no_io() -> None:
     assert result["answer"]
     assert result["sources"] == []
     assert result["chart"] is None
+
+
+def test_run_agent_missing_location_fast_path_no_io_or_llm() -> None:
+    from app.agents import graph as graph_module
+
+    graph_module._question_cache.clear()
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("No I/O or LLM call is allowed before clarification")
+
+    with (
+        patch.object(graph_module.T, "search_catalog", side_effect=_boom),
+        patch.object(graph_module.T, "query_dataset", side_effect=_boom),
+        patch(_PATCH_TARGET, side_effect=_boom),
+    ):
+        result = graph_module.run_agent("Casos de COVID en mi municipio esta semana")
+
+    assert result["needs_clarification"] is True
+    assert "municipio" in result["answer"].lower()
+    assert result["sources"] == []

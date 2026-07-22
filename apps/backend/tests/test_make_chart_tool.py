@@ -35,3 +35,12 @@ def test_make_chart_tool_signature_matches_underlying() -> None:
     direct = make_chart(SAMPLE, title="Direct", chart_type="auto")
     wrapped = make_chart_tool(SAMPLE, title="Direct", chart_type="auto")
     assert direct == wrapped
+
+
+def test_make_chart_detects_socrata_stringified_numbers() -> None:
+    spec = make_chart(
+        [{"municipio": "MedellÃ­n", "total": "120"}, {"municipio": "Envigado", "total": "80"}]
+    )
+
+    assert spec["mark"]["type"] == "bar"
+    assert spec["encoding"]["y"]["field"] == "total"

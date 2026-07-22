@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 
 from app.rag.eval_utils import compute_recall_at_k
-from scripts.eval_agent import _faithfulness_check
+from scripts.eval_agent import _dataset_selection_check, _faithfulness_check
 
 
 def test_recall_at_1_hit() -> None:
@@ -107,3 +107,64 @@ def test_faithfulness_check_fails_on_wrong_number() -> None:
         "answer": "Se encontraron 999 registros en total.",
     }
     assert _faithfulness_check(state, "number") == (False, "expected_number_not_in_answer")
+
+
+def test_faithfulness_check_multirow_uses_result_values_not_row_count() -> None:
+    state = {
+        "query_result": {
+            "rows": [
+                {"mes": "2026-06-01T00:00:00.000", "promedio": "4211.35"},
+                {"mes": "2025-06-01T00:00:00.000", "promedio": "4102.80"},
+            ],
+            "error": None,
+        },
+        "answer": "La TRM promedio fue 4.211,35 frente a 4.102,80.",
+    }
+
+    assert _faithfulness_check(state, "number + line_chart", min_numeric_matches=2) == (
+        True,
+        "",
+    )
+
+
+def test_faithfulness_check_multirow_does_not_accept_only_row_count() -> None:
+    state = {
+        "query_result": {
+            "rows": [
+                {"mes": "2026-06-01T00:00:00.000", "promedio": "4211.35"},
+                {"mes": "2025-06-01T00:00:00.000", "promedio": "4102.80"},
+            ],
+            "error": None,
+        },
+        "answer": "La consulta devolviÃ³ 2 filas.",
+    }
+
+    assert _faithfulness_check(state, "number + line_chart") == (
+        False,
+        "expected_number_not_in_answer",
+    )
+
+
+def test_faithfulness_check_single_row_requires_all_numeric_outputs() -> None:
+    state = {
+        "query_result": {
+            "rows": [{"vigentes": "120", "cardiovasculares": "35"}],
+            "error": None,
+        },
+        "answer": "Hay 120 medicamentos vigentes.",
+    }
+
+    assert _faithfulness_check(state, "number") == (
+        False,
+        "expected_number_not_in_answer",
+    )
+
+
+def test_dataset_selection_check_requires_all_join_datasets() -> None:
+    state = {"dataset_id": "4n4q-k399", "join_partner_id": "jbjy-vk9h"}
+    assert _dataset_selection_check(state, ["4n4q-k399", "jbjy-vk9h"]) is True
+    assert _dataset_selection_check(state, ["4n4q-k399", "missing-id"]) is False
+
+
+def test_dataset_selection_check_is_unscored_without_expected_ids() -> None:
+    assert _dataset_selection_check({"dataset_id": "anything"}, []) is None

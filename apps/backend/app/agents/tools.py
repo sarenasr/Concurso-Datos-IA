@@ -178,7 +178,7 @@ def make_chart(
     if len(keys) < 2:
         return {}
 
-    numeric_field = next((k for k in keys if _is_number(sample[k])), None)
+    numeric_field = next((k for k in keys if _coerce_number(sample[k]) is not None), None)
     date_field = next((k for k in keys if _looks_like_date(k)), None)
 
     if chart_type == "auto":
@@ -191,9 +191,16 @@ def make_chart(
     elif chart_type not in ("bar", "line", "table"):
         chart_type = "bar"
 
+    chart_data = [dict(row) for row in data[:200]]
+    if numeric_field is not None:
+        for row in chart_data:
+            numeric_value = _coerce_number(row.get(numeric_field))
+            if numeric_value is not None:
+                row[numeric_field] = numeric_value
+
     spec: dict[str, Any] = {
         "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
-        "data": {"values": data[:200]},
+        "data": {"values": chart_data},
     }
     if title:
         spec["title"] = title

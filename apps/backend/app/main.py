@@ -39,7 +39,7 @@ _STEP_LABELS = {
 
 app = FastAPI(title="Manglar", version="0.1.0")
 
-_cors_origins = settings.cors_origins
+_cors_origins = settings.cors_origins_list
 if not _cors_origins:
     log.warning("CORS_ORIGINS is empty — allowing all origins WITHOUT credentials (demo mode)")
     _cors_origins = ["*"]

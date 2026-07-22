@@ -26,6 +26,7 @@ import re
 from functools import lru_cache
 from pathlib import Path
 from typing import TypedDict
+from urllib.parse import parse_qsl
 
 import yaml
 from langgraph.graph import END, StateGraph
@@ -33,7 +34,7 @@ from langgraph.graph import END, StateGraph
 from app.agents import few_shots
 from app.agents import tools as T
 from app.agents.llm import llm_complete, llm_complete_small
-from app.agents.tools import _coerce_number, _is_number
+from app.agents.tools import _coerce_number
 from app.config import settings
 
 log = logging.getLogger("manglar.agent")
@@ -66,6 +67,10 @@ SOQL_SYSTEM_PROMPT = (
     "  $where=upper(ciudad)=upper('Medellín')  o  $where=upper(departamento) like upper('%antioquia%').\n"
     "  NUNCA asumas Title Case con un '=' exacto.\n"
     "- $limit por defecto 1000, máximo 50000\n"
+    "- Cada fragmento debe tener forma $parametro=valor y separarse con &: "
+    "$select=...&$where=... Nunca escribas SQL plano ni predicados fuera de $where.\n"
+    "- Usa upper(campo) like upper('%texto%'); ILIKE no está soportado.\n"
+    "- No uses subconsultas.\n"
     "- Agregaciones: $select=campo, count(*)&$group=campo\n"
     "- Top N: $order=campo DESC&$limit=N"
 )
@@ -123,7 +128,10 @@ JOIN_SYSTEM_PROMPT = (
     "(ej: documento_contratista)\n"
     '  "join_key_partner": el field_name de la columna del SECUNDARIO que sirve de llave '
     "(ej: documento_proveedor)\n"
-    "Reglas SoQL: Fechas ISO. Usa field_name no name. Devuelve SOLO el JSON, sin explicación."
+    "Reglas SoQL: Fechas ISO. Usa field_name no name. Cada consulta debe usar parámetros "
+    "$select=...&$where=...; nunca SQL plano ni predicados sueltos. Usa "
+    "upper(campo) like upper('%texto%'), nunca ILIKE. No uses subconsultas. "
+    "Devuelve SOLO el JSON, sin explicación."
 )
 
 
@@ -153,6 +161,8 @@ class AgentState(TypedDict):
     partner_query_result: dict | None
     is_chitchat: bool
     chitchat_answer_text: str
+    needs_clarification: bool
+    clarification_question: str
 
 
 # --- Helpers ---------------------------------------------------------------
@@ -216,19 +226,54 @@ def _clean_soql(raw: str) -> str:
     return soql.strip().strip("`").strip()
 
 
-def _looks_like_soql(soql: str) -> bool:
-    """True if the string contains at least one Socrata SoQL parameter token.
+_ALLOWED_SOQL_PARAMS = {
+    "$select",
+    "$where",
+    "$group",
+    "$order",
+    "$limit",
+    "$offset",
+    "$q",
+    "$having",
+    "$query",
+}
 
-    The SoQL generator LLM occasionally returns prose (a clarifying question)
-    or plain SQL (``SELECT ... FROM``) instead of the ``$select/$where/...``
-    query string Socrata expects. Neither contains a ``$``-prefixed SoQL
-    parameter, so a token check cheaply rejects both before they reach the API.
-    """
-    if not soql:
-        return False
-    tokens = ("$select", "$where", "$group", "$order", "$limit", "$offset", "$q", "$having", "$query")
-    lowered = soql.lower()
-    return any(t in lowered for t in tokens)
+
+def _validate_soql(soql: str) -> str | None:
+    """Return a concise structural validation error, or ``None`` when valid."""
+    if not soql or not soql.strip():
+        return "consulta vacía"
+    if re.search(r"\bilike\b", soql, re.IGNORECASE):
+        return "ILIKE no está soportado; usa upper(campo) like upper('%texto%')"
+
+    pairs = parse_qsl(soql.lstrip("?"), keep_blank_values=True)
+    if not pairs:
+        return "no contiene parámetros SoQL"
+
+    seen: set[str] = set()
+    for raw_key, value in pairs:
+        key = raw_key.lower().strip()
+        if key not in _ALLOWED_SOQL_PARAMS:
+            return f"parámetro SoQL inválido: {raw_key!r}"
+        if key in seen:
+            return f"parámetro SoQL duplicado: {raw_key}"
+        seen.add(key)
+        if not value.strip():
+            return f"valor vacío para {raw_key}"
+        if key in {"$limit", "$offset"}:
+            try:
+                number = int(value)
+            except ValueError:
+                return f"{raw_key} debe ser un entero"
+            if number < 0 or (key == "$limit" and number > _SOQL_HARD_LIMIT):
+                return f"{raw_key} fuera del rango permitido"
+
+    return None
+
+
+def _looks_like_soql(soql: str) -> bool:
+    """Backward-compatible boolean wrapper around :func:`_validate_soql`."""
+    return _validate_soql(soql) is None
 
 
 _JOIN_QUESTION_RE = re.compile(
@@ -330,6 +375,21 @@ CHITCHAT_ANSWER = (
 # --- Nodes ---------------------------------------------------------------
 
 
+_MISSING_LOCATION_RE = re.compile(
+    r"\bmi\s+(municipio|ciudad|departamento)\b",
+    re.IGNORECASE,
+)
+
+
+def _location_clarification(question: str) -> str | None:
+    """Return a clarification prompt when a possessive location has no context."""
+    match = _MISSING_LOCATION_RE.search(question)
+    if not match:
+        return None
+    location_type = match.group(1).lower()
+    return f"¿Cuál es tu {location_type}? Incluye el departamento si puede haber ambigüedad."
+
+
 def triage_node(state: AgentState) -> AgentState:
     """Classify the question as chitchat/meta vs. a genuine data question.
 
@@ -339,6 +399,17 @@ def triage_node(state: AgentState) -> AgentState:
     any exception, timeout, or unparsable response is the DATA path — we
     never want to wrongly refuse a genuine data question.
     """
+    clarification = _location_clarification(state["question"])
+    if clarification:
+        state["needs_clarification"] = True
+        state["clarification_question"] = clarification
+        state["is_chitchat"] = False
+        state["chitchat_answer_text"] = ""
+        state["step"] = "triage"
+        return state
+
+    state["needs_clarification"] = False
+    state["clarification_question"] = ""
     messages = [
         {"role": "system", "content": TRIAGE_SYSTEM_PROMPT},
         {"role": "user", "content": state["question"]},
@@ -375,6 +446,17 @@ def chitchat_answer_node(state: AgentState) -> AgentState:
     that came back blank).
     """
     state["answer"] = state.get("chitchat_answer_text") or CHITCHAT_ANSWER
+    state["sources"] = []
+    state["chart"] = None
+    state["step"] = "answer"
+    return state
+
+
+def clarification_answer_node(state: AgentState) -> AgentState:
+    """Ask for required context without catalog, Socrata, or another LLM call."""
+    state["answer"] = state.get("clarification_question") or (
+        "Necesito un poco más de contexto para consultar los datos."
+    )
     state["sources"] = []
     state["chart"] = None
     state["step"] = "answer"
@@ -609,9 +691,9 @@ def generate_soql_node(state: AgentState) -> AgentState:
         log.exception("generate_soql LLM call failed: %s", exc)
         soql = ""
 
-    if soql and not _looks_like_soql(soql):
-        log.warning("generate_soql produced a non-SoQL response, discarding: %r", soql[:200])
-        soql = ""
+    validation_error = _validate_soql(soql)
+    if validation_error:
+        log.warning("generate_soql produced invalid SoQL: %s", validation_error)
     state["soql"] = soql
     state["step"] = "generate_soql"
     return state
@@ -626,6 +708,15 @@ def execute_query_node(state: AgentState) -> AgentState:
             "rows": [],
             "count": 0,
             "error": "no_se_pudo_generar_la_consulta_o_no_hay_dataset",
+        }
+        state["step"] = "execute_query"
+        return state
+    validation_error = _validate_soql(soql)
+    if validation_error:
+        state["query_result"] = {
+            "rows": [],
+            "count": 0,
+            "error": f"invalid_soql: {validation_error}",
         }
         state["step"] = "execute_query"
         return state
@@ -770,7 +861,7 @@ def answer_node(state: AgentState) -> AgentState:
 
     state["answer"] = answer
 
-    if rows and len(rows[0]) >= 2 and any(_is_number(v) for v in rows[0].values()):
+    if rows and len(rows[0]) >= 2 and any(_coerce_number(v) is not None for v in rows[0].values()):
         state["chart"] = T.make_chart(rows[:50], title=schema.get("name", ""))
     else:
         state["chart"] = None
@@ -830,6 +921,19 @@ def _extract_where(soql: str) -> tuple[str, str]:
         elif not re.match(r"\s*\$(limit|offset)\s*=", stripped):
             remaining.append(p)
     return "&".join(remaining), " AND ".join(where_exprs)
+
+
+def _ensure_selected_field(soql: str, field: str) -> str:
+    """Ensure a simple field is present in ``$select`` without changing filters."""
+    parts = soql.split("&")
+    for index, part in enumerate(parts):
+        if part.strip().lower().startswith("$select="):
+            prefix, value = part.split("=", 1)
+            selected = {item.strip() for item in value.split(",")}
+            if field not in selected:
+                parts[index] = f"{prefix}={value},{field}"
+            return "&".join(parts)
+    return f"$select={field}&{soql}" if soql else f"$select={field}"
 
 
 def _build_join_messages(state: AgentState, *, correction: str | None = None) -> list[dict]:
@@ -907,6 +1011,7 @@ def join_generate_node(state: AgentState) -> AgentState:
         correction = prev_result["error"]
 
     messages = _build_join_messages(state, correction=correction)
+    raw = ""
     try:
         raw = llm_complete_small(messages, temperature=0)
         parsed = _parse_join_llm_response(raw)
@@ -933,10 +1038,57 @@ def join_generate_node(state: AgentState) -> AgentState:
         state["step"] = "join_generate"
         return state
 
-    state["soql"] = parsed["primary_soql"]
-    state["partner_soql"] = parsed["partner_soql"]
-    state["join_key_primary"] = parsed["join_key_primary"]
-    state["join_key_partner"] = parsed["join_key_partner"]
+    join_key_primary = str(parsed["join_key_primary"]).strip()
+    join_key_partner = str(parsed["join_key_partner"]).strip()
+    primary_fields = {
+        str(c.get("field_name", "")) for c in (primary_schema or {}).get("columns", [])
+    }
+    partner_fields = {
+        str(c.get("field_name", "")) for c in (partner_schema or {}).get("columns", [])
+    }
+    identifier_re = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+    validation_error = None
+    if not primary_schema or not partner_schema:
+        validation_error = "no se pudo cargar uno de los esquemas"
+    elif not identifier_re.fullmatch(join_key_primary) or join_key_primary not in primary_fields:
+        validation_error = f"llave primaria desconocida: {join_key_primary!r}"
+    elif not identifier_re.fullmatch(join_key_partner) or join_key_partner not in partner_fields:
+        validation_error = f"llave secundaria desconocida: {join_key_partner!r}"
+
+    partner_soql = _clean_soql(str(parsed["partner_soql"]))
+    partner_validation_error = _validate_soql(partner_soql)
+    if validation_error is None and partner_validation_error:
+        validation_error = f"consulta secundaria inválida: {partner_validation_error}"
+    if validation_error is None:
+        partner_soql = _ensure_selected_field(partner_soql, join_key_partner)
+
+    # The primary side only needs the join key. Compose it deterministically so
+    # plain SQL or extra filters from the LLM can never trigger a network retry.
+    primary_soql = (
+        f"$select={join_key_primary}&$where={join_key_primary} is not null&$limit=50000"
+        if identifier_re.fullmatch(join_key_primary)
+        else ""
+    )
+
+    state["soql"] = primary_soql
+    state["partner_soql"] = partner_soql
+    state["join_key_primary"] = join_key_primary
+    state["join_key_partner"] = join_key_partner
+    if validation_error:
+        state["query_result"] = {
+            "rows": [],
+            "count": 0,
+            "error": f"join_validation_error: {validation_error}",
+            "partial": False,
+        }
+        state["partner_query_result"] = {
+            "rows": [],
+            "count": 0,
+            "error": f"join_validation_error: {validation_error}",
+        }
+        state["step"] = "join_generate"
+        return state
+
     state["query_result"] = None
     state["step"] = "join_generate"
     return state
@@ -957,6 +1109,11 @@ def join_execute_node(state: AgentState) -> AgentState:
     partner_soql = state.get("partner_soql") or ""
     join_key_primary = state.get("join_key_primary") or ""
     join_key_partner = state.get("join_key_partner") or ""
+
+    existing_error = (state.get("query_result") or {}).get("error")
+    if existing_error and str(existing_error).startswith("join_validation_error:"):
+        state["step"] = "join_execute"
+        return state
 
     if (
         not primary_id
@@ -1022,14 +1179,22 @@ def join_execute_node(state: AgentState) -> AgentState:
     primary_rows = primary_rows[:_SOQL_HARD_LIMIT]
 
     seen_keys: set[str] = set()
-    unique_keys: list[str] = []
+    query_keys: list[str] = []
+    seen_query_keys: set[str] = set()
     for row in primary_rows:
-        k = _normalize_key(row.get(join_key_primary))
-        if k and k not in seen_keys:
-            seen_keys.add(k)
-            unique_keys.append(k)
+        raw_key = str(row.get(join_key_primary) or "").strip()
+        normalized_key = _normalize_key(raw_key)
+        if not normalized_key:
+            continue
+        seen_keys.add(normalized_key)
+        # Query both representations. Otherwise a punctuated primary NIT could
+        # miss an unpunctuated partner NIT (or vice versa) before client filtering.
+        for candidate in (raw_key, normalized_key):
+            if candidate and candidate not in seen_query_keys:
+                seen_query_keys.add(candidate)
+                query_keys.append(candidate)
 
-    if not unique_keys:
+    if not query_keys:
         state["query_result"] = {
             "rows": [],
             "count": 0,
@@ -1042,11 +1207,11 @@ def join_execute_node(state: AgentState) -> AgentState:
 
     base_partner_soql, existing_where = _extract_where(partner_soql)
     partner_rows: list[dict] = []
-    batch_size = 100
+    batch_size = 50
 
-    for i in range(0, len(unique_keys), batch_size):
-        batch_keys = unique_keys[i : i + batch_size]
-        keys_literal = ",".join(f"'{k}'" for k in batch_keys)
+    for i in range(0, len(query_keys), batch_size):
+        batch_keys = query_keys[i : i + batch_size]
+        keys_literal = ",".join(f"'{k.replace(chr(39), chr(39) * 2)}'" for k in batch_keys)
         key_filter = f"{join_key_partner} in ({keys_literal})"
         combined_where = f"({existing_where}) AND ({key_filter})" if existing_where else key_filter
         if base_partner_soql:
@@ -1130,6 +1295,8 @@ def join_query_node(state: AgentState) -> AgentState:
 
 def route_after_triage(state: AgentState) -> str:
     """Route chitchat/meta questions to the canned answer, else into search."""
+    if state.get("needs_clarification"):
+        return "clarification_answer"
     if state.get("is_chitchat"):
         return "chitchat_answer"
     return "search"
@@ -1188,6 +1355,7 @@ def build_agent():
     g = StateGraph(AgentState)
     g.add_node("triage", triage_node)
     g.add_node("chitchat_answer", chitchat_answer_node)
+    g.add_node("clarification_answer", clarification_answer_node)
     g.add_node("search", search_node)
     g.add_node("schema", schema_node)
     g.add_node("relevance_gate", relevance_gate_node)
@@ -1203,9 +1371,14 @@ def build_agent():
     g.add_conditional_edges(
         "triage",
         route_after_triage,
-        {"chitchat_answer": "chitchat_answer", "search": "search"},
+        {
+            "clarification_answer": "clarification_answer",
+            "chitchat_answer": "chitchat_answer",
+            "search": "search",
+        },
     )
     g.add_edge("chitchat_answer", END)
+    g.add_edge("clarification_answer", END)
     g.add_conditional_edges(
         "search",
         route_after_search,
@@ -1268,6 +1441,8 @@ def run_agent(question: str) -> AgentState:
         "partner_query_result": None,
         "is_chitchat": False,
         "chitchat_answer_text": "",
+        "needs_clarification": False,
+        "clarification_question": "",
     }
     result = agent.invoke(initial_state)
 

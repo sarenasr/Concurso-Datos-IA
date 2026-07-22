@@ -14,6 +14,8 @@ from unittest.mock import patch
 from app.agents.graph import (
     _detect_join_question,
     _resolve_secop_pair,
+    _validate_soql,
+    join_generate_node,
     join_query_node,
     route_after_search,
 )
@@ -268,3 +270,76 @@ def test_join_query_node_handles_llm_parse_failure() -> None:
         result = join_query_node(state)
 
     assert result["query_result"]["error"] == "join_llm_parse_failed"
+
+
+def test_validate_soql_rejects_bare_predicate_parameter() -> None:
+    error = _validate_soql(
+        "$select=documento_proveedor&documento_proveedor IS NOT NULL&$limit=100",
+    )
+    assert error is not None
+    assert "SoQL" in error
+
+
+def test_validate_soql_rejects_plain_select_and_ilike() -> None:
+    assert _validate_soql("SELECT documento_contratista WHERE x IS NOT NULL") is not None
+    assert _validate_soql("$select=x&$where=sector ILIKE '%salud%'") is not None
+
+
+def test_validate_soql_accepts_structured_query_and_rejects_bad_limit() -> None:
+    assert _validate_soql("$select=x,count(*)&$group=x&$limit=100") is None
+    assert _validate_soql("$select=x&$limit=50001") is not None
+
+
+def test_join_generate_composes_primary_query_from_validated_join_key() -> None:
+    import json
+
+    primary_schema = {"columns": [{"field_name": "documento_contratista", "datatype": "text"}]}
+    partner_schema = {
+        "columns": [
+            {"field_name": "documento_proveedor", "datatype": "text"},
+            {"field_name": "sector", "datatype": "text"},
+        ]
+    }
+    llm_response = json.dumps(
+        {
+            "primary_soql": "SELECT documento_contratista WHERE documento_contratista IS NOT NULL",
+            "partner_soql": "$select=documento_proveedor,sector&$where=upper(sector) like upper('%salud%')",
+            "join_key_primary": "documento_contratista",
+            "join_key_partner": "documento_proveedor",
+        }
+    )
+    state = _build_state_for_join()
+
+    with (
+        patch("app.agents.graph.T.get_schema", side_effect=[primary_schema, partner_schema]),
+        patch("app.agents.graph.llm_complete_small", return_value=llm_response),
+    ):
+        result = join_generate_node(state)
+
+    assert result["soql"] == (
+        "$select=documento_contratista&$where=documento_contratista is not null&$limit=50000"
+    )
+    assert result["query_result"] is None
+
+
+def test_join_generate_rejects_unknown_join_key_without_http_call() -> None:
+    import json
+
+    schema = {"columns": [{"field_name": "known_key", "datatype": "text"}]}
+    response = json.dumps(
+        {
+            "primary_soql": "$select=missing_key",
+            "partner_soql": "$select=known_key",
+            "join_key_primary": "missing_key",
+            "join_key_partner": "known_key",
+        }
+    )
+    state = _build_state_for_join()
+
+    with (
+        patch("app.agents.graph.T.get_schema", side_effect=[schema, schema]),
+        patch("app.agents.graph.llm_complete_small", return_value=response),
+    ):
+        result = join_generate_node(state)
+
+    assert result["query_result"]["error"].startswith("join_validation_error:")

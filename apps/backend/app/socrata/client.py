@@ -82,7 +82,18 @@ class SocrataClient:
                 r = self.client.get(path, params=params)
                 if r.status_code == 429 or r.status_code >= 500:
                     raise SocrataRetryableError(f"{r.status_code} {r.text[:200]}")
-            r.raise_for_status()
+            try:
+                r.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                # Socrata's JSON body contains the useful parser error. Preserve
+                # a compact version so the agent's single correction prompt can
+                # repair the query instead of seeing only "400 Bad Request".
+                detail = " ".join(r.text[:500].split())
+                raise httpx.HTTPStatusError(
+                    f"{r.status_code} {detail}",
+                    request=r.request,
+                    response=r,
+                ) from exc
             return r
 
         return _do()

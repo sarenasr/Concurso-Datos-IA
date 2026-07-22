@@ -8,7 +8,8 @@ hero_questions:
     question: "¿Cuántos casos de COVID hubo en mi municipio en la última semana con datos?"
     datasets: ["gt2j-8ykr"]
     pattern: geo_time_soql
-    answer_shape: number
+    answer_shape: clarification
+    expect_clarification: true
   - id: 3
     question: "¿Empresas sancionadas que además tienen contratos en salud en Antioquia?"
     datasets: ["4n4q-k399", "jbjy-vk9h"]   # cross-sector via NIT
@@ -20,6 +21,7 @@ hero_questions:
     datasets: ["mcec-87by"]
     pattern: time_series_compare
     answer_shape: number + line_chart
+    min_grounded_numbers: 2
   - id: 5
     question: "¿Qué datos abiertos existen sobre vacunación?"
     datasets: []
