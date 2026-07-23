@@ -218,14 +218,11 @@ refused** — the claim-checker is not implemented, so refusal is the correct be
   priority-dataset boost or a fallback injection rather than the raw vector+keyword legs — fine
   for a fixed demo, but it does not demonstrate generalization.
 
-Honest one-liner for a demo: *"recall@3 is perfect across our benchmark set of hero questions"* —
-not *"retrieval is 100% accurate."*
-
 ## Roadmap
 
 - **Phase 1 (hackathon)**: catalog RAG + SoQL agent + self-correction + citations + Vega-Lite + MCP server.
 - **Phase 2**: graph joins across sectors (NIT, municipio), claim-checker verdicts, auto-graph construction on full 10k catalog.
-- **Phase 3**: proactive dashboards, multi-turn memory, WhatsApp/voice channels, indigenous-language support.
+- **Phase 3**: proactive dashboards, multi-turn memory, WhatsApp/voice channels.
 
 ## Development
 
