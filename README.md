@@ -2,7 +2,7 @@
 
 # Manglar — Habla con los datos de Colombia
 
-*[Leer en español](README.es.md)*
+*[Leer en español](README.es.md)* | *[Link Frontend](https://concurso-datos-ia.vercel.app/)* | *[Link Frontend Bubble](https://concurso-datos-ia.vercel.app/)* | *[Link Telegram](https://web.telegram.org/a/#8940784231)*
 
 Manglar is an AI assistant for Colombian open data (datos.gov.co, a Socrata portal).
 Users ask questions in natural Spanish; Manglar finds the right datasets, writes SoQL
