@@ -305,7 +305,11 @@ def search_catalog(
         else:
             vector_rows = []
 
-    text_rows = _keyword_search(sb, query, k * 4)
+    # Keyword leg uses a wider window than the vector leg: Spanish FTS matches
+    # broadly (name+description+tags), so the exact-answer dataset can sit past
+    # rank k*4 even when field-weighting ranks it well. A wider window keeps it
+    # in fusion where the priority boost can act.
+    text_rows = _keyword_search(sb, query, k * 8)
 
     vector_preview = [
         (r.get("id"), r.get("name", "")[:50], f"{r.get('score', 0):.4f}")
@@ -376,8 +380,16 @@ def _keyword_search(sb, query: str, k: int) -> list[dict]:
     if not tokens:
         return []
 
+    # websearch_to_tsquery ANDs all terms together, so passing the raw question
+    # ("contratos públicos Medellín empresas") requires a single dataset to
+    # contain EVERY word — which almost never happens, so the leg returns empty.
+    # Feed it the stopword-stripped, synonym-expanded tokens joined with OR so a
+    # dataset matching ANY salient term enters the candidate window; the vector
+    # leg, RRF fusion, priority boost and reranker then sort out relevance.
+    or_query = " or ".join(tokens)
+
     try:
-        rows = sb.rpc("match_catalog_text", {"q": query, "k": k}).execute().data
+        rows = sb.rpc("match_catalog_text", {"q": or_query, "k": k}).execute().data
         if not isinstance(rows, list):
             raise TypeError("match_catalog_text RPC returned non-list data")
     except Exception as exc:  # noqa: BLE001
