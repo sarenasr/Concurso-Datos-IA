@@ -34,7 +34,7 @@ Built for the **Concurso Datos al Ecosistema 2026** hackathon.
               | client   | | (LLM)    | | pgvector  |
               +----------+ +----------+ +-----------+
                       |
-              +-------v------+  (same tools exposed to a local MCP client via stdio)
+              +-------v------+  (same tools exposed over streamable HTTP to any MCP client)
               |  FastMCP     |
               +--------------+
 ```
@@ -112,13 +112,15 @@ pnpm dev
 ## MCP server
 
 Manglar ships a standalone [MCP](https://modelcontextprotocol.io) server (FastMCP) that exposes the same five
-tools the agent uses — `search_catalog`, `get_schema`, `query_dataset`, `graph_neighbors`, `make_chart` — to
-any local MCP client over **stdio**. It is launched by the client (it is not a network service and there is no
-HTTP endpoint). It auto-loads the repo-root `.env`, so `search_catalog` / `graph_neighbors` need
-`OPENROUTER_API_KEY` + Supabase configured, while `get_schema` / `query_dataset` only need `SOCRATA_*`.
-`make_chart` needs nothing.
+tools the agent uses — `search_catalog`, `get_schema`, `query_dataset`, `graph_neighbors`, `make_chart` — over
+**streamable HTTP** on `http://127.0.0.1:8765/mcp`. It auto-loads the repo-root `.env`, so `search_catalog` /
+`graph_neighbors` need `OPENROUTER_API_KEY` + Supabase configured, while `get_schema` / `query_dataset` only
+need `SOCRATA_*`. `make_chart` needs nothing.
 
-Run it directly (it will block, waiting for a client on stdin):
+Imports for the agent tools (`openai`, `networkx`, …) are done lazily inside each tool call, so the process
+itself starts in ~1–2s — but it's still meant to run as a **long-lived server you start once**, not something
+a client spawns per-session. Run it in its own terminal (or background it) before connecting a client, and
+restart it after changing anything under `app/mcp_server` or `app/agents/tools.py`:
 
 ```bash
 cd apps/backend
@@ -127,36 +129,35 @@ uv run python -m app.mcp_server.server
 
 ### Add to Claude
 
-Claude Code — from the repo root:
-
-```bash
-claude mcp add manglar -- uv run --directory apps/backend python -m app.mcp_server.server
-```
-
-Claude Desktop — add to `claude_desktop_config.json` (`%APPDATA%\Claude\...` on Windows,
-`~/Library/Application Support/Claude/...` on macOS):
+Claude Code reads server config from `.mcp.json` at the repo root:
 
 ```json
 {
   "mcpServers": {
     "manglar": {
-      "command": "uv",
-      "args": ["run", "--directory", "/absolute/path/to/apps/backend", "python", "-m", "app.mcp_server.server"]
+      "type": "http",
+      "url": "http://127.0.0.1:8765/mcp"
     }
   }
 }
 ```
 
+With the server running, `claude mcp list` should show `manglar ... ✔ Connected`. If it's not running yet,
+start it first (see above) — Claude Code does not launch or manage this process for you.
+
+Claude Desktop doesn't support HTTP servers directly the same way; use an HTTP-to-stdio bridge (e.g.
+[`mcp-remote`](https://www.npmjs.com/package/mcp-remote)) pointed at the URL above in `claude_desktop_config.json`.
+
 ### Add to opencode
 
-Add an `mcp` block to `opencode.json` (command paths are relative to the repo root):
+Add an `mcp` block to `opencode.json` pointing at the running server:
 
 ```json
 {
   "mcp": {
     "manglar": {
-      "type": "local",
-      "command": ["uv", "run", "--directory", "apps/backend", "python", "-m", "app.mcp_server.server"],
+      "type": "remote",
+      "url": "http://127.0.0.1:8765/mcp",
       "enabled": true
     }
   }
@@ -175,6 +176,50 @@ Add an `mcp` block to `opencode.json` (command paths are relative to the repo ro
 8. Analizá el déficit de viviendas en Bogotá usando datos abiertos.
 9. ¿Cuántos medicamentos vigentes hay registrados y cuántos son del grupo cardiovasculares?
 10. ¿Cuántos beneficiarios de Familias en Acción hay por municipio en Antioquia?
+
+## Evaluation
+
+Two offline harnesses run against the Hero 10 questions (`scripts.eval_retrieval` and
+`scripts.eval_agent`). Latest results (2026-07-23):
+
+**Retrieval — recall@k** (does the correct dataset appear in the top *k*?). `n=8`: 8 of the
+10 hero questions have gold dataset labels; Q7 and Q8 are unlabeled by design (their "correct"
+answer is honest abstention, not a specific dataset) and are excluded from the aggregate.
+
+| Metric | Score |
+|---|---|
+| recall@1 | 0.69 |
+| recall@3 | 1.00 |
+| recall@5 | 1.00 |
+| recall@10 | 1.00 |
+
+**Agent — end-to-end with the real LLM** (10 questions):
+
+| Metric | Score |
+|---|---|
+| outcome success | 8/10 = 0.80 |
+| dataset selection | 6/6 = 1.00 |
+| SoQL success | 7/7 = 1.00 |
+| faithfulness | 6/7 = 0.86 |
+
+The two agent failures are honest ones: Q4 (TRM comparison) returned an answer missing the
+grounded numeric comparison, and Q6 (tweet fact-check) was **answered when it should have been
+refused** — the claim-checker is not implemented, so refusal is the correct behavior.
+
+**How much to trust these numbers — read this before quoting them:**
+
+- **Small sample.** `n=8`/10 questions; each is worth ~12 points, so one flip swings the
+  headline by ~12%. These are smoke tests, not statistically meaningful benchmarks.
+- **Not a held-out set.** These are the project's own hero questions — the retriever, the
+  curated `priority_datasets.yaml` list, and the synonym rules were tuned around them. Perfect
+  recall@3 here is *expected*, and says little about an unseen user query. A held-out eval set
+  is the next step for numbers worth trusting.
+- **Some wins are curation, not retrieval.** Several correct datasets win via the hand-curated
+  priority-dataset boost or a fallback injection rather than the raw vector+keyword legs — fine
+  for a fixed demo, but it does not demonstrate generalization.
+
+Honest one-liner for a demo: *"recall@3 is perfect across our benchmark set of hero questions"* —
+not *"retrieval is 100% accurate."*
 
 ## Roadmap
 

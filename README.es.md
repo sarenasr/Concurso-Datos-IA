@@ -32,7 +32,7 @@ Construido para el **Concurso Datos al Ecosistema 2026**.
               | Socrata  | | (LLM)    | | pgvector  |
               +----------+ +----------+ +-----------+
                       |
-              +-------v------+  (las mismas tools expuestas a un cliente MCP local vía stdio)
+              +-------v------+  (las mismas tools expuestas vía streamable HTTP a cualquier cliente MCP)
               |  FastMCP     |
               +--------------+
 ```
@@ -118,13 +118,17 @@ pnpm dev
 
 Manglar incluye un servidor [MCP](https://modelcontextprotocol.io) independiente (FastMCP) que
 expone las mismas cinco tools que usa el agente — `search_catalog`, `get_schema`,
-`query_dataset`, `graph_neighbors`, `make_chart` — a cualquier cliente MCP local vía **stdio**.
-Lo lanza el cliente (no es un servicio de red, no hay endpoint HTTP). Carga automáticamente el
-`.env` de la raíz del repo, por lo que `search_catalog` / `graph_neighbors` necesitan
-`OPENROUTER_API_KEY` + Supabase configurados, mientras que `get_schema` / `query_dataset` solo
-necesitan `SOCRATA_*`. `make_chart` no necesita nada.
+`query_dataset`, `graph_neighbors`, `make_chart` — vía **streamable HTTP** en
+`http://127.0.0.1:8765/mcp`. Carga automáticamente el `.env` de la raíz del repo, por lo que
+`search_catalog` / `graph_neighbors` necesitan `OPENROUTER_API_KEY` + Supabase configurados,
+mientras que `get_schema` / `query_dataset` solo necesitan `SOCRATA_*`. `make_chart` no necesita
+nada.
 
-Ejecutarlo directamente (queda bloqueado esperando un cliente en stdin):
+Los imports de las tools del agente (`openai`, `networkx`, …) se hacen de forma diferida dentro de
+cada tool, por lo que el proceso arranca en ~1–2s — aun así está pensado para correr como un
+**servidor de larga duración que se inicia una vez**, no algo que el cliente lance por sesión.
+Ejecutarlo en su propia terminal (o en background) antes de conectar un cliente, y reiniciarlo
+tras cambiar algo bajo `app/mcp_server` o `app/agents/tools.py`:
 
 ```bash
 cd apps/backend
@@ -133,37 +137,36 @@ uv run python -m app.mcp_server.server
 
 ### Agregar a Claude
 
-Claude Code — desde la raíz del repo:
-
-```bash
-claude mcp add manglar -- uv run --directory apps/backend python -m app.mcp_server.server
-```
-
-Claude Desktop — agregar a `claude_desktop_config.json` (`%APPDATA%\Claude\...` en Windows,
-`~/Library/Application Support/Claude/...` en macOS):
+Claude Code lee la configuración del servidor desde `.mcp.json` en la raíz del repo:
 
 ```json
 {
   "mcpServers": {
     "manglar": {
-      "command": "uv",
-      "args": ["run", "--directory", "/ruta/absoluta/a/apps/backend", "python", "-m", "app.mcp_server.server"]
+      "type": "http",
+      "url": "http://127.0.0.1:8765/mcp"
     }
   }
 }
 ```
 
+Con el servidor corriendo, `claude mcp list` debería mostrar `manglar ... ✔ Connected`. Si aún no
+está corriendo, arrancarlo primero (ver arriba) — Claude Code no lanza ni administra este proceso.
+
+Claude Desktop no soporta servidores HTTP directamente de la misma forma; usar un puente
+HTTP-a-stdio (p. ej. [`mcp-remote`](https://www.npmjs.com/package/mcp-remote)) apuntando a la URL
+de arriba en `claude_desktop_config.json`.
+
 ### Agregar a opencode
 
-Agregar un bloque `mcp` a `opencode.json` (las rutas de comando son relativas a la raíz del
-repo):
+Agregar un bloque `mcp` a `opencode.json` apuntando al servidor en ejecución:
 
 ```json
 {
   "mcp": {
     "manglar": {
-      "type": "local",
-      "command": ["uv", "run", "--directory", "apps/backend", "python", "-m", "app.mcp_server.server"],
+      "type": "remote",
+      "url": "http://127.0.0.1:8765/mcp",
       "enabled": true
     }
   }
@@ -182,6 +185,52 @@ repo):
 8. Analizá el déficit de viviendas en Bogotá usando datos abiertos.
 9. ¿Cuántos medicamentos vigentes hay registrados y cuántos son del grupo cardiovasculares?
 10. ¿Cuántos beneficiarios de Familias en Acción hay por municipio en Antioquia?
+
+## Evaluación
+
+Dos harnesses offline corren contra las preguntas Hero 10 (`scripts.eval_retrieval` y
+`scripts.eval_agent`). Últimos resultados (2026-07-23):
+
+**Recuperación — recall@k** (¿aparece el dataset correcto en el top *k*?). `n=8`: 8 de las 10
+preguntas hero tienen etiqueta de dataset de referencia; Q7 y Q8 quedan sin etiquetar a
+propósito (su respuesta "correcta" es la abstención honesta, no un dataset específico) y se
+excluyen del agregado.
+
+| Métrica | Valor |
+|---|---|
+| recall@1 | 0.69 |
+| recall@3 | 1.00 |
+| recall@5 | 1.00 |
+| recall@10 | 1.00 |
+
+**Agente — extremo a extremo con el LLM real** (10 preguntas):
+
+| Métrica | Valor |
+|---|---|
+| éxito de resultado | 8/10 = 0.80 |
+| selección de dataset | 6/6 = 1.00 |
+| éxito de SoQL | 7/7 = 1.00 |
+| fidelidad | 6/7 = 0.86 |
+
+Los dos fallos del agente son honestos: Q4 (comparación de TRM) devolvió una respuesta a la que
+le faltaba la comparación numérica fundamentada, y Q6 (verificación de tweet) **fue respondida
+cuando debía rechazarse** — el verificador de afirmaciones no está implementado, así que el
+rechazo es la conducta correcta.
+
+**Cuánto confiar en estos números — leer esto antes de citarlos:**
+
+- **Muestra pequeña.** `n=8`/10 preguntas; cada una vale ~12 puntos, así que un cambio mueve el
+  titular ~12%. Son pruebas de humo, no benchmarks estadísticamente significativos.
+- **No es un conjunto held-out.** Son las propias preguntas hero del proyecto — el recuperador,
+  la lista curada `priority_datasets.yaml` y las reglas de sinónimos se ajustaron en torno a
+  ellas. Un recall@3 perfecto aquí es *esperable*, y dice poco sobre una consulta no vista. Un
+  conjunto de evaluación held-out es el siguiente paso para números confiables.
+- **Algunos aciertos son curaduría, no recuperación.** Varios datasets correctos ganan vía el
+  boost de datasets prioritarios curados o una inyección de fallback, no por las patas crudas
+  vector+palabra clave — sirve para un demo fijo, pero no demuestra generalización.
+
+Frase honesta para un demo: *"el recall@3 es perfecto en nuestro conjunto de referencia de
+preguntas hero"* — no *"la recuperación tiene 100% de precisión"*.
 
 ## Roadmap
 
