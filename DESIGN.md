@@ -258,18 +258,16 @@ All user-facing copy is Spanish (es-CO), sentence case, active voice.
 
 ### Logo assets
 
-Three official assets (source: `LOGO MANGLAR` folder) — copied into
+Multiple official assets (source: `LOGO MANGLAR` folder) — copied into
 `apps/frontend/public/brand/`:
-
-| Asset | File | Use |
-|---|---|---|
-| Isotipo (dot mangrove, transparent) | `manglar-isotipo.png` | Favicon, chat avatar, FAB, loading state, OG image |
-| Logotipo claro (mark + wordmark, dark-blue text) | `manglar-logotipo-claro.png` | Header/footer on light surfaces |
-| Logotipo negro (mark + wordmark, white text) | `manglar-logotipo-negro.png` | Header/footer on dark surfaces |
 
 The variant names describe the **background** the lockup is built for:
 `claro` (dark-blue wordmark) sits on light surfaces; `negro` (white
 wordmark) sits on dark surfaces.
+
+You can find the differnt png assets in the `public/brand` folder you must use them corresponding to the name of the file. `LOGOTIPO` = wordmark, `ISOTIPO` = mark. 'BLANCO' = white, 'NEGRO' = black, 'CLARO' = light, 'OSCURO' = dark.
+
+The `manglar-loading.webp` is important for all parts of the frontend where we are loading.
 
 Rules: never recolor, stretch, crop, or add effects to the mark — the
 multicolor isotype is only ever shown in full color on a light surface (give

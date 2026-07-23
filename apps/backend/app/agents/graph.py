@@ -144,6 +144,7 @@ class AgentState(TypedDict):
     question: str
     datasets: list[dict]
     dataset_id: str | None
+    pinned_dataset_id: str | None
     schema: dict | None
     soql: str | None
     query_result: dict | None
@@ -399,6 +400,13 @@ def triage_node(state: AgentState) -> AgentState:
     any exception, timeout, or unparsable response is the DATA path — we
     never want to wrongly refuse a genuine data question.
     """
+    # Pin: if the user pasted a dataset id/link, set dataset_id here (in a real
+    # node, whose state mutations persist) so route_after_triage can skip RAG
+    # search. Conditional-edge routers are pure and their mutations are dropped.
+    pinned = state.get("pinned_dataset_id")
+    if pinned:
+        state["dataset_id"] = pinned
+
     clarification = _location_clarification(state["question"])
     if clarification:
         state["needs_clarification"] = True
@@ -1321,11 +1329,20 @@ def join_query_node(state: AgentState) -> AgentState:
 
 
 def route_after_triage(state: AgentState) -> str:
-    """Route chitchat/meta questions to the canned answer, else into search."""
+    """Route chitchat/meta questions to the canned answer, else into search.
+
+    When a dataset id was pinned by the user (e.g. pasted a datos.gov.co link),
+    skip RAG dataset selection entirely and go straight to ``schema`` with that
+    dataset id already set.
+    """
     if state.get("needs_clarification"):
         return "clarification_answer"
     if state.get("is_chitchat"):
         return "chitchat_answer"
+    # dataset_id was set from the pin in triage_node (routers are pure — a
+    # mutation here would be dropped). Just decide the route.
+    if state.get("pinned_dataset_id"):
+        return "schema"
     return "search"
 
 
@@ -1367,10 +1384,12 @@ def route_after_join_check(state: AgentState) -> str:
 
 # --- Question cache ---------------------------------------------------------
 
-# Simple in-memory cache: question -> final AgentState.
-# Bounded to _CACHE_MAX entries (FIFO eviction).
+# Simple in-memory cache: (question, pinned_dataset_id) -> final AgentState.
+# Bounded to _CACHE_MAX entries (FIFO eviction). Keying on the pinned dataset id
+# too avoids returning a stale answer when the same question is later asked
+# against a different pinned dataset.
 _CACHE_MAX = 100
-_question_cache: dict[str, AgentState] = {}
+_question_cache: dict[tuple[str, str | None], AgentState] = {}
 
 
 # --- Build the graph -------------------------------------------------------
@@ -1402,6 +1421,7 @@ def build_agent():
             "clarification_answer": "clarification_answer",
             "chitchat_answer": "chitchat_answer",
             "search": "search",
+            "schema": "schema",
         },
     )
     g.add_edge("chitchat_answer", END)
@@ -1431,17 +1451,19 @@ def build_agent():
     return g.compile()
 
 
-def run_agent(question: str) -> AgentState:
+def run_agent(question: str, pinned_dataset_id: str | None = None) -> AgentState:
     """Run the full agent on a user question and return the final state.
 
     Returns the full AgentState dict: answer, chart, sources, soql, dataset_id,
     datasets, retry_count, and step.
 
-    Results are cached in memory: if the exact same question was asked before,
-    the cached state is returned instantly without re-running the agent.
+    Results are cached in memory: if the exact same question (against the same
+    pinned dataset id, if any) was asked before, the cached state is returned
+    instantly without re-running the agent.
     """
     # Check cache first
-    cached = _question_cache.get(question)
+    cache_key = (question, pinned_dataset_id)
+    cached = _question_cache.get(cache_key)
     if cached is not None:
         log.info("Cache hit for question: %s", question[:60])
         return cached
@@ -1451,6 +1473,7 @@ def run_agent(question: str) -> AgentState:
         "question": question,
         "datasets": [],
         "dataset_id": None,
+        "pinned_dataset_id": pinned_dataset_id,
         "schema": None,
         "soql": None,
         "query_result": None,
@@ -1477,6 +1500,6 @@ def run_agent(question: str) -> AgentState:
     if len(_question_cache) >= _CACHE_MAX:
         oldest_key = next(iter(_question_cache))
         del _question_cache[oldest_key]
-    _question_cache[question] = result  # type: ignore[assignment]
+    _question_cache[cache_key] = result  # type: ignore[assignment]
 
     return result  # type: ignore[return-value]

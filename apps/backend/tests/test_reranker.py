@@ -1,15 +1,17 @@
-"""Tests for the batched LLM reranker.
+"""Tests for the OpenRouter hosted cross-encoder reranker.
 
-The reranker now asks a small LLM to score ALL candidate datasets in ONE call,
-returning a JSON map ``{id: score}``. These tests mock ``llm_complete_small`` to
-verify the blending logic, graceful degradation paths, and the delta-skip
-optimisation.
+The reranker sends the top candidates to OpenRouter's hosted rerank endpoint
+(``POST https://openrouter.ai/api/v1/rerank``) in ONE HTTP call. These tests
+mock ``httpx.post`` to verify the reordering logic, graceful degradation
+paths (missing key / HTTP error, timeout, malformed response), empty input,
+and truncation behaviour. No real network calls are made.
 """
 
 from __future__ import annotations
 
-import json
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
+
+import httpx
 
 from app.rag.reranker import rerank_datasets
 
@@ -19,56 +21,147 @@ def _candidate(id_: str, score: float, name: str = "", description: str = "") ->
         "id": id_,
         "name": name or f"Dataset {id_}",
         "description": description or f"Description for {id_}",
+        "domain_category": "General",
         "score": score,
     }
 
 
-def _patch_llm(side_effect=None, return_value=None):
-    kwargs = (
-        {"side_effect": side_effect} if side_effect is not None else {"return_value": return_value}
-    )
-    return patch("app.agents.llm.llm_complete_small", **kwargs)
+def _mock_response(json_data: dict, status_code: int = 200) -> MagicMock:
+    resp = MagicMock()
+    resp.status_code = status_code
+    resp.json.return_value = json_data
+    if status_code >= 400:
+        resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "error", request=MagicMock(), response=resp
+        )
+    else:
+        resp.raise_for_status.return_value = None
+    return resp
 
 
-def test_reranker_promotes_high_llm_score_to_top() -> None:
-    """When LLM gives 0.9 to the second candidate and 0.1 to the rest, it wins."""
+def test_reranker_promotes_high_relevance_to_top() -> None:
+    """When the API ranks the second candidate first, it wins."""
     candidates = [
         _candidate("a", 0.50),
         _candidate("b", 0.48),
         _candidate("c", 0.45),
     ]
-    payload = '{"a": 0.1, "b": 0.9, "c": 0.1}'
+    api_response = {
+        "results": [
+            {"index": 0, "relevance_score": 0.10},
+            {"index": 1, "relevance_score": 0.95},
+            {"index": 2, "relevance_score": 0.05},
+        ]
+    }
 
-    with _patch_llm(return_value=payload):
+    with (
+        patch("app.rag.reranker.settings.openrouter_api_key", "test-key"),
+        patch(
+            "app.rag.reranker.httpx.post", return_value=_mock_response(api_response)
+        ) as mock_post,
+    ):
         result = rerank_datasets("cuantos contratos hay", candidates, top_k=3)
 
     assert result[0]["id"] == "b"
+    assert result[0]["rerank_score"] == 0.95
     assert len(result) == 3
+    mock_post.assert_called_once()
 
 
-def test_reranker_returns_input_unchanged_on_llm_exception() -> None:
-    """On any LLM error the reranker degrades gracefully to input order."""
+def test_reranker_returns_input_unchanged_when_no_api_key() -> None:
+    """With no OpenRouter key, the reranker short-circuits without an HTTP call."""
     candidates = [
         _candidate("x", 0.9),
         _candidate("y", 0.7),
         _candidate("z", 0.5),
     ]
 
-    with _patch_llm(side_effect=RuntimeError("LLM unavailable")):
+    with (
+        patch("app.rag.reranker.settings.openrouter_api_key", ""),
+        patch("app.rag.reranker.httpx.post") as mock_post,
+    ):
+        result = rerank_datasets("test query", candidates, top_k=3)
+
+    assert [r["id"] for r in result] == ["x", "y", "z"]
+    assert result[0]["score"] == 0.9
+    mock_post.assert_not_called()
+
+
+def test_reranker_returns_input_unchanged_on_http_error() -> None:
+    """On an HTTP error status, the reranker no-ops and returns input order."""
+    candidates = [
+        _candidate("x", 0.9),
+        _candidate("y", 0.7),
+        _candidate("z", 0.5),
+    ]
+
+    with (
+        patch("app.rag.reranker.settings.openrouter_api_key", "test-key"),
+        patch(
+            "app.rag.reranker.httpx.post",
+            return_value=_mock_response({}, status_code=500),
+        ),
+    ):
         result = rerank_datasets("test query", candidates, top_k=3)
 
     assert [r["id"] for r in result] == ["x", "y", "z"]
     assert result[0]["score"] == 0.9
 
 
-def test_reranker_handles_unparseable_llm_output() -> None:
-    """When the LLM returns garbage, the reranker returns input sorted by existing score."""
+def test_reranker_returns_input_unchanged_on_timeout() -> None:
+    """On timeout the reranker returns input sorted by existing score."""
     candidates = [
         _candidate("a", 0.8),
         _candidate("b", 0.6),
     ]
 
-    with _patch_llm(return_value="sorry, no scores today"):
+    with (
+        patch("app.rag.reranker.settings.openrouter_api_key", "test-key"),
+        patch(
+            "app.rag.reranker.httpx.post",
+            side_effect=httpx.TimeoutException("timed out"),
+        ),
+    ):
+        result = rerank_datasets("query", candidates, top_k=2)
+
+    assert [r["id"] for r in result] == ["a", "b"]
+    assert result[0]["score"] == 0.8
+
+
+def test_reranker_handles_malformed_results() -> None:
+    """When the response has no usable results, falls back to input order."""
+    candidates = [
+        _candidate("a", 0.8),
+        _candidate("b", 0.6),
+    ]
+
+    with (
+        patch("app.rag.reranker.settings.openrouter_api_key", "test-key"),
+        patch(
+            "app.rag.reranker.httpx.post",
+            return_value=_mock_response({"not_results": []}),
+        ),
+    ):
+        result = rerank_datasets("test query", candidates, top_k=2)
+
+    assert [r["id"] for r in result] == ["a", "b"]
+    assert result[0]["score"] == 0.8
+
+
+def test_reranker_handles_empty_results_array() -> None:
+    """An empty results array falls back to input order."""
+    candidates = [
+        _candidate("a", 0.8),
+        _candidate("b", 0.6),
+    ]
+
+    with (
+        patch("app.rag.reranker.settings.openrouter_api_key", "test-key"),
+        patch(
+            "app.rag.reranker.httpx.post",
+            return_value=_mock_response({"results": []}),
+        ),
+    ):
         result = rerank_datasets("test query", candidates, top_k=2)
 
     assert [r["id"] for r in result] == ["a", "b"]
@@ -76,83 +169,45 @@ def test_reranker_handles_unparseable_llm_output() -> None:
 
 
 def test_reranker_empty_candidates() -> None:
-    """Empty input returns empty output without calling the LLM."""
-    with _patch_llm(return_value="{}") as mock_llm:
+    """Empty input returns empty output without calling the API."""
+    with patch("app.rag.reranker.httpx.post") as mock_post:
         result = rerank_datasets("query", [], top_k=5)
 
     assert result == []
-    mock_llm.assert_not_called()
+    mock_post.assert_not_called()
 
 
-def test_reranker_timeout_path() -> None:
-    """On timeout the reranker returns input sorted by existing score."""
-    candidates = [
-        _candidate("a", 0.8),
-        _candidate("b", 0.6),
-    ]
+def test_reranker_truncates_to_max_candidates() -> None:
+    """Only the top rerank_max_candidates (by fused score) are sent to the API."""
+    candidates = [_candidate(f"d{i}", 1.0 - i * 0.01) for i in range(30)]
 
-    def _raise_timeout(*args, **kwargs):
-        raise TimeoutError("took too long")
+    def _fake_post(url, headers=None, json=None, timeout=None):
+        assert len(json["documents"]) == 5
+        return _mock_response({"results": [{"index": 0, "relevance_score": 0.5}]})
 
-    with _patch_llm(side_effect=_raise_timeout):
+    with (
+        patch("app.rag.reranker.settings.openrouter_api_key", "test-key"),
+        patch("app.rag.reranker.settings.rerank_max_candidates", 5),
+        patch("app.rag.reranker.httpx.post", side_effect=_fake_post),
+    ):
+        rerank_datasets("query", candidates, top_k=1)
+
+
+def test_reranker_respects_top_k() -> None:
+    """Returns at most top_k results even if the API scores more."""
+    candidates = [_candidate(f"d{i}", 1.0 - i * 0.1) for i in range(5)]
+    api_response = {
+        "results": [
+            {"index": i, "relevance_score": 1.0 - i * 0.1} for i in range(5)
+        ]
+    }
+
+    with (
+        patch("app.rag.reranker.settings.openrouter_api_key", "test-key"),
+        patch(
+            "app.rag.reranker.httpx.post", return_value=_mock_response(api_response)
+        ),
+    ):
         result = rerank_datasets("query", candidates, top_k=2)
 
-    assert [r["id"] for r in result] == ["a", "b"]
-    assert result[0]["score"] == 0.8
-
-
-def test_reranker_delta_skip_avoids_llm_call() -> None:
-    """When top-2 scores differ by more than RERANK_DELTA, LLM is not called."""
-    candidates = [
-        _candidate("clear_winner", 0.95),
-        _candidate("far_behind", 0.30),
-        _candidate("also_behind", 0.25),
-    ]
-
-    with _patch_llm(return_value='{"clear_winner": 0.0, "far_behind": 1.0}') as mock_llm:
-        result = rerank_datasets("query", candidates, top_k=3)
-
-    mock_llm.assert_not_called()
-    assert result[0]["id"] == "clear_winner"
-    assert result[0]["score"] == 0.95
-
-
-def test_reranker_makes_at_most_one_llm_call() -> None:
-    """Latency spec: the reranker must make AT MOST 1 LLM call regardless of N."""
-    candidates = [_candidate(f"d{i}", 0.5 - i * 0.01) for i in range(10)]
-
-    payload = {f"d{i}": 0.5 for i in range(10)}
-
-    with _patch_llm(return_value=json.dumps(payload)) as mock_llm:
-        rerank_datasets("query", candidates, top_k=5)
-
-    assert mock_llm.call_count <= 1
-
-
-def test_reranker_missing_id_defaults_to_zero_not_dropped() -> None:
-    """An id missing from the parsed JSON gets llm_score=0.0, it is NOT dropped."""
-    candidates = [
-        _candidate("present", 0.5),
-        _candidate("missing", 0.5),
-    ]
-    with _patch_llm(return_value='{"present": 0.9}'):
-        result = rerank_datasets("query", candidates, top_k=2)
-
-    ids = {r["id"] for r in result}
-    assert ids == {"present", "missing"}
-    present = next(r for r in result if r["id"] == "present")
-    missing = next(r for r in result if r["id"] == "missing")
-    assert present["score"] > missing["score"]
-
-
-def test_reranker_strips_markdown_fences() -> None:
-    """LLM responses wrapped in ```json ... ``` are parsed correctly."""
-    candidates = [
-        _candidate("a", 0.5),
-        _candidate("b", 0.5),
-    ]
-    payload = '```json\n{"a": 0.9, "b": 0.1}\n```'
-    with _patch_llm(return_value=payload):
-        result = rerank_datasets("query", candidates, top_k=2)
-
-    assert result[0]["id"] == "a"
+    assert len(result) == 2

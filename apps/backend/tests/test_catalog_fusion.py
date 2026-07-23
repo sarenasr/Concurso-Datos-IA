@@ -186,24 +186,46 @@ def test_tokenize_query_empty() -> None:
     assert _tokenize_query("de en la los las") == []
 
 
-def test_keyword_search_uses_per_token_ilike() -> None:
-    """_keyword_search issues one ilike query per token and unions results."""
+def test_keyword_search_uses_rpc_when_available() -> None:
+    """_keyword_search calls the match_catalog_text RPC and ranks its rows."""
     sb = MagicMock()
+    rpc_data = [
+        {"id": "a", "name": "A", "page_views_last_month": 0},
+        {"id": "b", "name": "B", "page_views_last_month": 0},
+    ]
+    sb.rpc.return_value.execute.return_value.data = rpc_data
+
+    result = _keyword_search(sb, "contratos públicos", k=10)
+
+    sb.rpc.assert_called_once_with("match_catalog_text", {"q": "contratos públicos", "k": 10})
+    sb.table.assert_not_called()
+    assert [r["id"] for r in result] == ["a", "b"]
+    assert result[0]["text_score"] > result[1]["text_score"]
+
+
+def test_keyword_search_falls_back_to_ilike_on_rpc_failure() -> None:
+    """When the RPC raises (e.g. migration not applied), fall back to ilike
+    over name OR description via the PostgREST ``.or_`` filter."""
+    sb = MagicMock()
+    sb.rpc.return_value.execute.side_effect = Exception("function does not exist")
     chain = sb.table.return_value.select.return_value.eq.return_value
-    chain.ilike.return_value.limit.return_value.execute.return_value.data = []
+    chain.or_.return_value.limit.return_value.execute.return_value.data = []
 
     _keyword_search(sb, "contratos públicos", k=10)
 
-    ilike_calls = chain.ilike.call_args_list
-    tokens_used = [call.args[1].strip("%") for call in ilike_calls]
-    assert "contratos" in tokens_used
-    assert "públicos" in tokens_used
-    assert len(ilike_calls) <= 5
+    or_calls = chain.or_.call_args_list
+    assert len(or_calls) <= 5
+    for call in or_calls:
+        filter_str = call.args[0]
+        assert "name.ilike." in filter_str
+        assert "description.ilike." in filter_str
 
 
 def test_keyword_search_best_rank_for_multi_token_match() -> None:
-    """When a dataset matches multiple tokens, its text_score uses the best rank."""
+    """When a dataset matches multiple tokens, its text_score uses the best rank
+    (ilike fallback path, since the RPC is unavailable)."""
     sb = MagicMock()
+    sb.rpc.return_value.execute.side_effect = Exception("function does not exist")
     chain = sb.table.return_value.select.return_value.eq.return_value
 
     first_call_data = [
@@ -214,7 +236,7 @@ def test_keyword_search_best_rank_for_multi_token_match() -> None:
         {"id": "x", "name": "X", "page_views_last_month": 0},
     ]
 
-    execute_mock = chain.ilike.return_value.limit.return_value.execute
+    execute_mock = chain.or_.return_value.limit.return_value.execute
     execute_mock.side_effect = [
         MagicMock(data=first_call_data),
         MagicMock(data=second_call_data),
@@ -233,6 +255,7 @@ def test_keyword_search_empty_query() -> None:
     result = _keyword_search(sb, "", k=10)
     assert result == []
     sb.table.assert_not_called()
+    sb.rpc.assert_not_called()
 
 
 def test_priority_fallback_injects_with_rrf_scale_score() -> None:

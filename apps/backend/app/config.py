@@ -33,8 +33,8 @@ class Settings(BaseSettings):
     supabase_secret_key: str = ""
 
     # LLM via LiteLLM (provider-agnostic, OpenAI-compatible)
-    litellm_model: str = "gpt-4.1-mini"
-    litellm_small_model: str = "qwen3.7-plus"
+    litellm_model: str = "anthropic/claude-sonnet-4.5"
+    litellm_small_model: str = "anthropic/claude-sonnet-4.5"
     litellm_api_base: str = ""
     litellm_api_key: str = ""
     openai_api_key: str = ""
@@ -50,14 +50,20 @@ class Settings(BaseSettings):
     # Misc
     log_level: str = "INFO"
     numpy_fallback: bool = False
+    # Reranker: hosted cross-encoder (cohere/rerank-v3.5) via OpenRouter, using
+    # the same OPENROUTER_API_KEY as chat/embeddings. Fast (~200-500ms) and
+    # accurate, so it's safe to leave on; it no-ops gracefully with no key.
     enable_reranker: bool = True
     # LLM latency budget (interactive latency guard against slow/flaky providers)
     llm_timeout_s: float = 15.0
     llm_max_attempts: int = 2
     llm_backoff_max_s: float = 2.0
-    # Reranker latency budget
-    rerank_timeout_s: float = 8.0
-    rerank_max_candidates: int = 8
+    # Reranker: single HTTP call to OpenRouter's hosted rerank endpoint (a
+    # cross-encoder, not an LLM completion) — cheap enough to allow a larger
+    # candidate batch than the old LLM-based reranker.
+    rerank_model: str = "cohere/rerank-4-pro"
+    rerank_timeout_s: float = 3.0
+    rerank_max_candidates: int = 20
     cors_origins: str = (
         "http://localhost:3000,"
         "https://concurso-datos-ia.vercel.app,"

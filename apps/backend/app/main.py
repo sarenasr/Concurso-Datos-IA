@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from functools import lru_cache
 from typing import Any
@@ -93,11 +94,24 @@ def _extract_question(body: dict) -> str:
     return str(last)
 
 
-async def _run_agent_async(question: str) -> dict:
+_DATASET_ID_RE = re.compile(r"\b[a-z0-9]{4}-[a-z0-9]{4}\b")
+
+
+def extract_pinned_dataset_id(text: str) -> str | None:
+    """Return the first Socrata dataset id (``xxxx-xxxx``) found in *text*, or None.
+
+    Matches bare ids and ids embedded in datos.gov.co URLs (``/d/{id}``,
+    ``/resource/{id}``, ``/dataset/.../{id}``) since they all share the same shape.
+    """
+    match = _DATASET_ID_RE.search(text)
+    return match.group(0) if match else None
+
+
+async def _run_agent_async(question: str, pinned_dataset_id: str | None = None) -> dict:
     """Run the sync agent in a worker thread so the event loop stays free."""
     from app.agents.graph import run_agent
 
-    return await asyncio.to_thread(run_agent, question)
+    return await asyncio.to_thread(run_agent, question, pinned_dataset_id)
 
 
 @lru_cache(maxsize=1)
@@ -195,6 +209,7 @@ async def chat(request: Request) -> StreamingResponse | JSONResponse:
     body = await request.json()
     question = _extract_question(body)
     stream = bool(body.get("stream", True))
+    pinned_dataset_id = extract_pinned_dataset_id(question)
 
     if not question:
         err = {"type": "error", "content": "No se recibió ninguna pregunta."}
@@ -208,7 +223,7 @@ async def chat(request: Request) -> StreamingResponse | JSONResponse:
 
     if not stream:
         try:
-            result = await _run_agent_async(question)
+            result = await _run_agent_async(question, pinned_dataset_id)
         except Exception as exc:  # noqa: BLE001
             log.exception("agent run failed: %s", exc)
             return JSONResponse({"error": f"Error interno: {exc}"}, status_code=500)
@@ -225,7 +240,8 @@ async def chat(request: Request) -> StreamingResponse | JSONResponse:
         seen: set[str] = {"search"}  # search label already emitted above
 
         # Cache: replay instantly
-        cached = _question_cache.get(question)
+        cache_key = (question, pinned_dataset_id)
+        cached = _question_cache.get(cache_key)
         if cached is not None:
             log.info("Cache hit for question: %s", question[:60])
             for ev in _emit_result_events(cached):
@@ -238,6 +254,7 @@ async def chat(request: Request) -> StreamingResponse | JSONResponse:
             "question": question,
             "datasets": [],
             "dataset_id": None,
+            "pinned_dataset_id": pinned_dataset_id,
             "schema": None,
             "soql": None,
             "query_result": None,
@@ -303,7 +320,7 @@ async def chat(request: Request) -> StreamingResponse | JSONResponse:
         if len(_question_cache) >= _CACHE_MAX:
             oldest = next(iter(_question_cache))
             del _question_cache[oldest]
-        _question_cache[question] = final_state
+        _question_cache[cache_key] = final_state
         for ev in _emit_result_events(final_state):
             yield ev
         yield "data: [DONE]\n\n"

@@ -13,7 +13,7 @@ from __future__ import annotations
 import time
 
 from app.config import settings
-from app.rag.embeddings import embed_texts, BATCH_SIZE
+from app.rag.embeddings import embed_texts, BATCH_SIZE, TASK_TYPE_DOCUMENT
 
 
 def _supabase():
@@ -77,7 +77,7 @@ def main() -> None:
     for i in range(0, len(todo), BATCH_SIZE):
         batch = todo[i : i + BATCH_SIZE]
         docs = [_doc(r) for r in batch]
-        vectors = embed_texts(docs)
+        vectors = embed_texts(docs, task_type=TASK_TYPE_DOCUMENT)
         if len(vectors) != len(batch):
             print(f"  WARNING: got {len(vectors)} vectors for {len(batch)} docs — skipping batch")
             continue

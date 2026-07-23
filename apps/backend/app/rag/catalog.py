@@ -35,6 +35,14 @@ _RRF_K = 60
 _PRIORITY_BOOST_ADD = 0.02
 _PRIORITY_FALLBACK_SCORE = 0.05
 _PRIORITY_FALLBACK_THRESHOLD = 0.02
+# Safe-override gate: a priority dataset is only allowed to be force-ranked to
+# #1 when the best GENUINE (non-priority-match) score is below this. Fused RRF
+# scores live in ~0.015-0.05; 0.03 sits between the "weak match" floor
+# (_PRIORITY_FALLBACK_THRESHOLD, 0.02) and the fallback score itself (0.05), so
+# a confident genuine hit (>= 0.03) can never be leapfrogged by a keyword-only
+# priority match. Below the gate, priority is still capped just under the top
+# genuine score (see _priority_fallback) rather than an unconditional 0.05.
+_GENUINE_CONFIDENT_SCORE = 0.03
 _MAX_KEYWORD_TOKENS = 5
 
 _STOPWORDS = frozenset(
@@ -335,12 +343,20 @@ def search_catalog(
 
 
 def _keyword_search(sb, query: str, k: int) -> list[dict]:
-    """Keyword search leg: per-token ``ilike`` on the catalog ``name`` column.
+    """Keyword search leg: Postgres full-text search over name+description+tags.
 
-    Tokenizes the query (same pipeline as ``_priority_keyword_match``), then
-    issues one ``ilike`` query per token (capped at ``_MAX_KEYWORD_TOKENS``).
-    Results are unioned in Python; when a dataset matches multiple tokens its
-    ``text_score`` uses the best (lowest) rank across all token queries.
+    Primary path calls the ``match_catalog_text`` RPC (see
+    ``infra/supabase/migrations/007_fts.sql``), which runs
+    ``websearch_to_tsquery('spanish', q)`` against a generated ``fts`` tsvector
+    covering ``name``, ``description`` and ``domain_tags`` — so relevance
+    hiding in the description or tags (not just the name) now enters fusion.
+
+    If the RPC fails (e.g. the migration hasn't been applied yet), we fall
+    back to the previous per-token ``ilike`` approach, broadened to match
+    ``name`` OR ``description`` (tags aren't filterable via PostgREST ``.or_``
+    ilike, so that coverage only comes from the RPC path). Tokenization
+    (``_tokenize_query``) and the rank-based ``text_score`` computation are
+    unchanged in the fallback.
 
     Returns a list of dicts with the same shape as vector results, with a
     ``text_score`` based on linear rank decay from 1.0 to 0.
@@ -348,6 +364,25 @@ def _keyword_search(sb, query: str, k: int) -> list[dict]:
     tokens = _tokenize_query(query)[:_MAX_KEYWORD_TOKENS]
     if not tokens:
         return []
+
+    try:
+        rows = sb.rpc("match_catalog_text", {"q": query, "k": k}).execute().data
+        if not isinstance(rows, list):
+            raise TypeError("match_catalog_text RPC returned non-list data")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("match_catalog_text RPC failed, falling back to ilike: %s", exc)
+        rows = None
+
+    if rows is not None:
+        n = len(rows)
+        if n == 0:
+            return []
+        result: list[dict] = []
+        for rank, row in enumerate(rows):
+            entry = dict(row)
+            entry["text_score"] = 1.0 - (rank / max(n, 1))
+            result.append(entry)
+        return result[:k]
 
     best_rank: dict[str, int] = {}
     row_by_id: dict[str, dict] = {}
@@ -358,7 +393,7 @@ def _keyword_search(sb, query: str, k: int) -> list[dict]:
                 sb.table("catalog")
                 .select("id, name, description, domain_category, permalink, page_views_last_month")
                 .eq("type", "dataset")
-                .ilike("name", f"%{token}%")
+                .or_(f"name.ilike.%{token}%,description.ilike.%{token}%")
                 .limit(k)
                 .execute()
                 .data
@@ -380,7 +415,7 @@ def _keyword_search(sb, query: str, k: int) -> list[dict]:
     if n == 0:
         return []
 
-    result: list[dict] = []
+    result = []
     for rid, row in row_by_id.items():
         entry = dict(row)
         entry["text_score"] = 1.0 - (best_rank[rid] / max(n, 1))
@@ -448,15 +483,30 @@ def _apply_priority_boost(rows: list[dict]) -> list[dict]:
 def _priority_fallback(rows: list[dict], query: str, k: int) -> list[dict]:
     """Ensure the best keyword-matched priority dataset is in the results.
 
-    Two-stage logic:
+    SAFE OVERRIDE semantics: priority should only ever win the #1 spot when
+    genuine retrieval confidence is LOW. A hand-curated keyword match must
+    never be allowed to leapfrog a confident, independently-derived vector/
+    keyword hit — that produced off-topic top suggestions in practice.
+
     1. If the top result already *is* the best keyword-matched priority dataset
        with a score above ``_PRIORITY_FALLBACK_THRESHOLD``, do nothing.
-    2. Otherwise inject (or boost) the best match to position #1.
+    2. Otherwise compute the top GENUINE score — the best score among rows
+       that are *not* the priority match itself (before any injection).
+    3. Low-confidence gate: only if that top genuine score is below
+       ``_GENUINE_CONFIDENT_SCORE`` (or there is no genuine competition at
+       all) do we boost/inject the priority match to #1, using
+       ``_PRIORITY_FALLBACK_SCORE`` (0.05) as before — safe, because by
+       construction the genuine competition is weak here.
+    4. Otherwise (a confident genuine match already leads) the priority
+       dataset is NOT force-ranked to #1. If it's missing from the results we
+       still surface it (so it's available to downstream logic/UI) but its
+       score is capped strictly below the genuine leader
+       (``min(_PRIORITY_FALLBACK_SCORE, top_genuine_score - epsilon)``) so it
+       can, at best, land just behind the confident genuine hit. If it's
+       already present, we leave it untouched.
 
-    The injected entry gets ``_PRIORITY_FALLBACK_SCORE`` (0.05) — a small
-    RRF-scale value that reliably promotes the priority dataset above the noise
-    floor without fabricating a high-confidence score. Tagged with
-    ``"reason": "priority_keyword_match"`` for auditability.
+    Entries touched by this function keep the ``"reason":
+    "priority_keyword_match"`` tag (injected case) for auditability.
     """
     matches = _priority_keyword_match(query)
     if not matches:
@@ -474,7 +524,59 @@ def _priority_fallback(rows: list[dict], query: str, k: int) -> list[dict]:
     ):
         return rows
 
+    # Top GENUINE score: best score among rows that are NOT the priority match
+    # itself. This is the bar the priority override must NOT be allowed to
+    # clear when it's meaningfully high (see _GENUINE_CONFIDENT_SCORE).
+    genuine_scores = [float(r.get("score", 0.0)) for r in rows if r.get("id") != best_id]
+    top_genuine_score = max(genuine_scores) if genuine_scores else None
+    confident_genuine = (
+        top_genuine_score is not None and top_genuine_score >= _GENUINE_CONFIDENT_SCORE
+    )
+
     existing = next((r for r in rows if r.get("id") == best_id), None)
+
+    if confident_genuine:
+        # A confident genuine hit already leads — do NOT override it. Just
+        # make sure the priority dataset is still surfaced somewhere in the
+        # result set, capped below the genuine leader (never force-ranked
+        # over it).
+        if existing is not None:
+            log.info(
+                "Priority fallback: skipped override for %s (%s); genuine top "
+                "score %.4f >= confident threshold %.4f",
+                best_id,
+                best_name,
+                top_genuine_score,
+                _GENUINE_CONFIDENT_SCORE,
+            )
+            return rows
+
+        injected_score = max(min(_PRIORITY_FALLBACK_SCORE, top_genuine_score - 1e-4), 0.0)
+        log.info(
+            "Priority fallback: surfaced %s (%s) at score %.4f, capped below the "
+            "confident genuine leader (%.4f) instead of forcing #1",
+            best_id,
+            best_name,
+            injected_score,
+            top_genuine_score,
+        )
+        injected = {
+            "id": best_id,
+            "name": best.get("name", ""),
+            "description": "",
+            "domain_category": best.get("sector", ""),
+            "permalink": f"https://{settings.socrata_domain}/d/{best_id}",
+            "page_views_last_month": 0,
+            "score": injected_score,
+            "reason": "priority_keyword_match",
+        }
+        rows = rows + [injected]
+        rows.sort(key=lambda r: r["score"], reverse=True)
+        return rows
+
+    # Low-confidence path: genuine retrieval is weak (or absent), so it's safe
+    # to boost/inject the priority dataset to the top — unchanged from the
+    # original behavior.
     if existing:
         old_score = float(existing.get("score", 0.0))
         existing["score"] = max(
@@ -493,10 +595,13 @@ def _priority_fallback(rows: list[dict], query: str, k: int) -> list[dict]:
         return rows
 
     log.info(
-        "Priority fallback: injected %s (%s) as #1 with score %.4f (was not in top results)",
+        "Priority fallback: injected %s (%s) as #1 with score %.4f (was not in top "
+        "results; genuine competition is weak: top genuine score=%s < %.4f)",
         best_id,
         best_name,
         _PRIORITY_FALLBACK_SCORE,
+        f"{top_genuine_score:.4f}" if top_genuine_score is not None else "n/a",
+        _GENUINE_CONFIDENT_SCORE,
     )
     injected = {
         "id": best_id,
