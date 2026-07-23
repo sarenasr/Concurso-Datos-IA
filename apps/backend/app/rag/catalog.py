@@ -153,7 +153,7 @@ def _tokenize_query(query: str) -> list[str]:
         if w not in seen:
             seen.add(w)
             result.append(w)
-    for w in _expand_synonyms(set(raw)):
+    for w in sorted(_expand_synonyms(set(raw))):
         if w not in seen:
             seen.add(w)
             result.append(w)

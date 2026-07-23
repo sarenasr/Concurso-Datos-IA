@@ -197,7 +197,10 @@ def test_keyword_search_uses_rpc_when_available() -> None:
 
     result = _keyword_search(sb, "contratos públicos", k=10)
 
-    sb.rpc.assert_called_once_with("match_catalog_text", {"q": "contratos públicos", "k": 10})
+    sb.rpc.assert_called_once_with(
+        "match_catalog_text",
+        {"q": "contratos or públicos or contratacion or contrato or secop", "k": 10},
+    )
     sb.table.assert_not_called()
     assert [r["id"] for r in result] == ["a", "b"]
     assert result[0]["text_score"] > result[1]["text_score"]
