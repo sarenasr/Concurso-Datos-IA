@@ -2,6 +2,8 @@
 
 # Manglar — Habla con los datos de Colombia
 
+*[Leer en español](README.es.md)*
+
 Manglar is an AI assistant for Colombian open data (datos.gov.co, a Socrata portal).
 Users ask questions in natural Spanish; Manglar finds the right datasets, writes SoQL
 queries, validates them, and returns an answer with a Vega-Lite chart, citations, and a
