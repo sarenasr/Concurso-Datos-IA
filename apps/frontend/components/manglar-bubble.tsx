@@ -32,10 +32,10 @@ export function ManglarBubble() {
       {open && (
         <div
           ref={panelRef}
-          className="manglar-panel-enter absolute bottom-20 right-0 flex w-[380px] flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl shadow-black/25 sm:w-[420px]"
+          className="manglar-panel-enter absolute bottom-28 right-0 flex w-[min(440px,calc(100vw-3rem))] flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl shadow-black/25"
           style={
             {
-              height: 520,
+              height: "min(560px, calc(100vh - 9rem))",
               "--background": "#ffffff",
               "--foreground": "#0a0a0a",
               "--card": "#ffffff",
@@ -48,13 +48,13 @@ export function ManglarBubble() {
           }
         >
           <div className="flex shrink-0 items-center gap-3 border-b border-white/10 bg-manglar-raiz px-4 py-3">
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white shadow-sm">
+            <span className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-white shadow-sm">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src="/brand/manglar-isotipo.png"
                 alt=""
-                width={24}
-                height={24}
+                width={48}
+                height={48}
               />
             </span>
             <div className="flex flex-1 flex-col">
@@ -62,7 +62,7 @@ export function ManglarBubble() {
                 Manglar
               </span>
               <span className="text-[10px] font-medium leading-tight text-white/70">
-                Habla con los datos
+                Explora Colombia conversando
               </span>
             </div>
             <button
@@ -78,35 +78,38 @@ export function ManglarBubble() {
         </div>
       )}
 
+      {/* Welcome message - desktop only, positioned to the left of bubble */}
       {!open && showWelcome && (
         <div
-          className="manglar-panel-enter pointer-events-none absolute bottom-[4.5rem] right-0 flex w-[260px] items-center gap-2 rounded-2xl border border-border/60 bg-card px-3 py-2.5 shadow-lg shadow-black/10"
+          className="manglar-panel-enter pointer-events-none hidden md:block absolute bottom-8 right-[100px] w-[340px] rounded-2xl border border-border/60 bg-card px-4 py-3 pr-8 shadow-lg shadow-black/10"
           role="status"
         >
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src="/brand/manglar-isotipo.png"
-            alt=""
-            width={28}
-            height={28}
-            className="shrink-0"
-          />
-          <div className="min-w-0 flex-1 text-xs">
-            <p className="font-semibold text-foreground leading-tight">
-              Hola, soy Manglar
-            </p>
-            <p className="text-muted-foreground leading-tight">
-              Pregúntame sobre los datos de Colombia.
-            </p>
-          </div>
           <button
             type="button"
             onClick={() => setShowWelcome(false)}
-            className="pointer-events-auto -mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            className="pointer-events-auto absolute top-2 right-2 flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             aria-label="Cerrar aviso"
           >
             <X className="h-3 w-3" />
           </button>
+          <div className="flex items-center gap-3">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/brand/manglar-isotipo.png"
+              alt=""
+              width={40}
+              height={40}
+              className="shrink-0"
+            />
+            <div className="min-w-0 flex-1 text-sm">
+              <p className="font-semibold text-foreground leading-tight">
+                Explora Colombia conversando
+              </p>
+              <p className="text-muted-foreground leading-tight">
+                Pregúntame sobre los datos de Colombia.
+              </p>
+            </div>
+          </div>
         </div>
       )}
 
@@ -116,20 +119,21 @@ export function ManglarBubble() {
           setShowWelcome(false);
           setOpen((v) => !v);
         }}
-        className={`manglar-bubble-pulse flex h-16 w-16 items-center justify-center rounded-full border border-border bg-white text-manglar-raiz shadow-lg shadow-black/20 transition-all duration-200 hover:scale-105 active:scale-95 ${
+        className={`manglar-bubble-pulse flex items-center justify-center rounded-full border border-border bg-white text-manglar-raiz shadow-lg shadow-black/20 transition-all duration-200 hover:scale-105 active:scale-95 ${
           open ? "manglar-bubble-idle" : ""
-        }`}
+        } md:h-24 md:w-24 h-20 w-20`}
         aria-label={open ? "Cerrar chat Manglar" : "Abrir chat Manglar"}
       >
         {open ? (
-          <X className="h-7 w-7" strokeWidth={2.5} />
+          <X className="md:h-9 md:w-9 h-8 w-8" strokeWidth={2.5} />
         ) : (
           // eslint-disable-next-line @next/next/no-img-element
           <img
             src="/brand/manglar-isotipo.png"
             alt="Manglar"
-            width={38}
-            height={38}
+            width={64}
+            height={64}
+            className="md:w-[64px] md:h-[64px] w-[56px] h-[56px]"
           />
         )}
       </button>

@@ -153,8 +153,8 @@ const AssistantBubble = memo(function AssistantBubble({
       )}
 
       {msg.streaming && !msg.answer && (
-        <div className="flex flex-col items-center py-2">
-          <LoadingLogo size={48} />
+        <div className="flex flex-col items-center justify-center py-6">
+          <LoadingLogo size={80} />
         </div>
       )}
 
@@ -361,22 +361,21 @@ export function Chat({ compact = false }: { compact?: boolean } = {}) {
                   : "flex flex-col items-center justify-center py-12 md:py-20 text-center"
               }
             >
-              <div
-                className={
-                  compact
-                    ? "mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-manglar-marea/15 ring-2 ring-manglar-marea/20"
-                    : "mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-manglar-marea/15 ring-2 ring-manglar-marea/20"
-                }
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src="/brand/manglar-isotipo.png"
-                  alt="Manglar"
-                  width={compact ? 28 : 48}
-                  height={compact ? 28 : 48}
-                  className="shrink-0"
-                />
-              </div>
+              {/* Logotipo in center of screen - bigger */}
+              <img
+                src="/brand/LOGOTIPOCLARO.png"
+                alt="Manglar"
+                width={compact ? 160 : 240}
+                height={compact ? 44 : 66}
+                className="shrink-0 mb-4 dark:hidden"
+              />
+              <img
+                src="/brand/LOGOTIPOOSCURO.png"
+                alt="Manglar"
+                width={compact ? 160 : 240}
+                height={compact ? 44 : 66}
+                className="shrink-0 mb-4 hidden dark:block"
+              />
               <h2
                 className={
                   compact
@@ -384,13 +383,13 @@ export function Chat({ compact = false }: { compact?: boolean } = {}) {
                     : "mb-2 text-2xl font-bold tracking-tight text-foreground md:text-3xl"
                 }
               >
-                ¿Qué quieres saber hoy?
+                Explora Colombia conversando
               </h2>
               <p
                 className={
                   compact
                     ? "mb-4 max-w-xs text-xs text-muted-foreground leading-relaxed"
-                    : "mb-10 max-w-md text-sm text-muted-foreground leading-relaxed"
+                    : "mb-8 max-w-md text-sm text-muted-foreground leading-relaxed"
                 }
               >
                 Pregúntame sobre datos abiertos de Colombia. Busco en datos.gov.co,
@@ -476,7 +475,7 @@ export function Chat({ compact = false }: { compact?: boolean } = {}) {
             placeholder="Pregunta sobre los datos de Colombia..."
             disabled={loading}
             rows={1}
-            className="flex-1 resize-none rounded-xl border border-border bg-muted/50 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-manglar-marea/40 focus:border-manglar-marea/40 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+            className="min-w-0 flex-1 resize-none rounded-xl border border-border bg-muted/50 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-manglar-marea/40 focus:border-manglar-marea/40 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
           />
           {loading ? (
             <Button

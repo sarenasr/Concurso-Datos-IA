@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
   --background: #ffffff;
   --foreground: #0f1b33;
@@ -36,28 +38,26 @@
   --chart-5: #68bdbc;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a1428;
-    --foreground: #eef3fa;
-    --card: #111f3c;
-    --card-foreground: #eef3fa;
-    --popover: #111f3c;
-    --popover-foreground: #eef3fa;
-    --primary: #68bdbc;
-    --primary-foreground: #0a1428;
-    --secondary: #16264a;
-    --secondary-foreground: #eef3fa;
-    --muted: #16264a;
-    --muted-foreground: #93a3bd;
-    --accent: #16264a;
-    --accent-foreground: #68bdbc;
-    --destructive: #e55d6e;
-    --destructive-foreground: #0a1428;
-    --border: #22345a;
-    --input: #22345a;
-    --ring: #68bdbc;
-  }
+.dark {
+  --background: #0a1428;
+  --foreground: #eef3fa;
+  --card: #111f3c;
+  --card-foreground: #eef3fa;
+  --popover: #111f3c;
+  --popover-foreground: #eef3fa;
+  --primary: #68bdbc;
+  --primary-foreground: #0a1428;
+  --secondary: #16264a;
+  --secondary-foreground: #eef3fa;
+  --muted: #16264a;
+  --muted-foreground: #93a3bd;
+  --accent: #16264a;
+  --accent-foreground: #68bdbc;
+  --destructive: #e55d6e;
+  --destructive-foreground: #0a1428;
+  --border: #22345a;
+  --input: #22345a;
+  --ring: #68bdbc;
 }
 
 @theme inline {

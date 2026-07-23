@@ -1,7 +1,7 @@
 "use client";
 
 export function LoadingLogo({
-  size = 48,
+  size = 80,
   className = "",
   alt = "Manglar cargando",
 }: {
@@ -11,7 +11,7 @@ export function LoadingLogo({
 } = {}) {
   return (
     <span
-      className={`relative inline-block shrink-0 ${className}`.trim()}
+      className={`flex items-center justify-center shrink-0 ${className}`.trim()}
       style={{ width: size, height: size }}
     >
       {/* Animated mangrove growing — the brand loading animation. */}
