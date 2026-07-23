@@ -12,7 +12,10 @@ alter table catalog
   add column if not exists fts tsvector
   generated always as (
     to_tsvector(
-      'spanish',
+      -- cast to regconfig: the text-literal form to_tsvector('spanish', ...)
+      -- is only STABLE (runtime config lookup) and is rejected in a generated
+      -- column; the regconfig overload is IMMUTABLE.
+      'spanish'::regconfig,
       coalesce(name, '') || ' ' || coalesce(description, '') || ' ' ||
       array_to_string(coalesce(domain_tags, '{}'), ' ')
     )
