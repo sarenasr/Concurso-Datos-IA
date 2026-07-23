@@ -229,14 +229,12 @@ rechazo es la conducta correcta.
   boost de datasets prioritarios curados o una inyección de fallback, no por las patas crudas
   vector+palabra clave — sirve para un demo fijo, pero no demuestra generalización.
 
-Frase honesta para un demo: *"el recall@3 es perfecto en nuestro conjunto de referencia de
-preguntas hero"* — no *"la recuperación tiene 100% de precisión"*.
 
 ## Roadmap
 
 - **Fase 1 (hackathon)**: RAG del catálogo + agente SoQL + autocorrección + citas + Vega-Lite + servidor MCP.
 - **Fase 2**: joins de grafo entre sectores (NIT, municipio), veredictos de verificación de afirmaciones, construcción automática del grafo sobre el catálogo completo de 10k.
-- **Fase 3**: dashboards proactivos, memoria multi-turno, canales de WhatsApp/voz, soporte de lenguas indígenas.
+- **Fase 3**: dashboards proactivos, memoria multi-turno, canales de WhatsApp/voz.
 
 ## Desarrollo
 
