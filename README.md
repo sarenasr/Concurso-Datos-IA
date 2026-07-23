@@ -1,3 +1,5 @@
+<img width="1538" height="1375" alt="LOGOTIPO CLARO" src="https://github.com/user-attachments/assets/30a086f0-d71f-4b8c-9880-5948b762b1e5" />
+
 # Manglar — Habla con los datos de Colombia
 
 Manglar is an AI assistant for Colombian open data (datos.gov.co, a Socrata portal).
