@@ -127,8 +127,10 @@ const SoQLBlock = memo(function SoQLBlock({
 
 const AssistantBubble = memo(function AssistantBubble({
   msg,
+  compact,
 }: {
   msg: AssistantMsg;
+  compact: boolean;
 }) {
   const hasContent =
     msg.thinking ||
@@ -154,7 +156,7 @@ const AssistantBubble = memo(function AssistantBubble({
 
       {msg.streaming && !msg.answer && (
         <div className="flex flex-col items-center justify-center py-6">
-          <LoadingLogo size={80} />
+          <LoadingLogo size={80} responsive={!compact} />
         </div>
       )}
 
@@ -448,7 +450,7 @@ export function Chat({ compact = false }: { compact?: boolean } = {}) {
                     </div>
                   ) : (
                     <div className="min-w-0 flex-1 max-w-[85%]">
-                      <AssistantBubble msg={msg} />
+                      <AssistantBubble msg={msg} compact={compact} />
                     </div>
                   )}
                 </div>
