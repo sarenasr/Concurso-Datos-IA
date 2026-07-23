@@ -54,9 +54,7 @@ def _call_rerank_api(query: str, documents: list[str], top_n: int) -> dict:
         "documents": documents,
         "top_n": top_n,
     }
-    resp = httpx.post(
-        _RERANK_URL, headers=headers, json=payload, timeout=settings.rerank_timeout_s
-    )
+    resp = httpx.post(_RERANK_URL, headers=headers, json=payload, timeout=settings.rerank_timeout_s)
     resp.raise_for_status()
     return resp.json()
 

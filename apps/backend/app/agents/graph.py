@@ -813,13 +813,19 @@ def answer_node(state: AgentState) -> AgentState:
     if error and not rows:
         if not did:
             suggestions = datasets[:3]
-            names = ", ".join(s.get("name", "") for s in suggestions if s.get("name"))
+            links = []
+            for s in suggestions:
+                name = s.get("name", "")
+                if not name:
+                    continue
+                permalink = s.get("permalink")
+                links.append(f"[{name}]({permalink})" if permalink else name)
             state["answer"] = (
                 "No encontré un dataset claramente relevante para tu pregunta en "
                 "el catálogo de datos.gov.co."
             )
-            if names:
-                state["answer"] += f" Tal vez te refieras a: {names}."
+            if links:
+                state["answer"] += f" Tal vez te refieras a: {', '.join(links)}."
             state["chart"] = None
             state["step"] = "answer"
             return state

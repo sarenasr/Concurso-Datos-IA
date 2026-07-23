@@ -9,10 +9,27 @@ See the root `README.md` for setup. Key entrypoints:
 - MCP server: `uv run python -m app.mcp_server.server`
 - Telegram bot (polling): `uv run python -m app.channels.telegram_bot`
 
-## Scripts (run in order)
+## Scripts
+
+Setup (run in order):
 
 ```bash
 uv run python -m scripts.ingest_catalog      # load catalog into Supabase
-uv run python -m scripts.build_embeddings    # embed catalog rows (Gemini)
+uv run python -m scripts.build_embeddings    # embed catalog rows (Gemini via OpenRouter)
 uv run python -m scripts.build_graph         # build dataset knowledge graph
+```
+
+Evaluation (require a populated catalog + embeddings):
+
+```bash
+uv run python -m scripts.eval_retrieval      # recall@1/@3/@5/@10 against a labeled eval set
+uv run python -m scripts.eval_agent          # end-to-end SoQL success rate + faithfulness
+```
+
+## Tests
+
+```bash
+uv run pytest -v            # unit tests, see tests/
+uv run ruff check .         # lint
+uv run ruff format --check . # formatting (matches CI)
 ```

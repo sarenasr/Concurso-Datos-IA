@@ -24,7 +24,7 @@ hero_questions:
     min_grounded_numbers: 2
   - id: 5
     question: "¿Qué datos abiertos existen sobre vacunación?"
-    datasets: []
+    datasets: ["uw8e-gzpp"]   # Vacunación COVID — único dataset de vacunación en el catálogo
     pattern: catalog_rag
     answer_shape: ranked_dataset_list
   - id: 6
@@ -35,7 +35,7 @@ hero_questions:
     expect_refusal: true   # claim_checker no está implementado; hoy la conducta correcta es la negación honesta. Si se implementa claim_checker, quitar este flag.
   - id: 7
     question: "¿Qué hay de Antioquia en datos?"
-    datasets: []
+    datasets: []   # "Antioquia" es un filtro geográfico transversal, no un tema con dataset propio; sin ground truth principled, queda fuera del recall a propósito.
     pattern: geo_dashboard
     answer_shape: multi_dataset_summary
   - id: 8

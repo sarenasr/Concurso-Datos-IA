@@ -264,12 +264,94 @@ def test_priority_fallback_injects_with_rrf_scale_score() -> None:
 
     rows = [{"id": "other", "name": "Other", "score": 0.005}]
     fake_match = {"id": "prio-1", "name": "Priority", "sector": "salud"}
+    vector_rows = [{"id": "prio-1", "score": 0.80}]
 
     with (
         patch("app.rag.catalog._priority_keyword_match", return_value=[fake_match]),
     ):
-        result = _priority_fallback(rows, "query", k=5)
+        result = _priority_fallback(rows, "query", k=5, vector_rows=vector_rows)
 
     assert result[0]["id"] == "prio-1"
     assert result[0]["score"] == _PRIORITY_FALLBACK_SCORE
     assert result[0]["reason"] == "priority_keyword_match"
+
+
+def test_priority_fallback_requires_vector_support_to_force_rank() -> None:
+    """Without a genuine vector-similarity hit, a keyword-only match is not
+    force-ranked to #1 even though genuine competition is weak (top score
+    0.005 < _GENUINE_CONFIDENT_SCORE) — it is still surfaced, but capped
+    below whatever genuine competition exists rather than winning #1."""
+    from app.rag.catalog import _priority_fallback
+
+    rows = [{"id": "other", "name": "Other", "score": 0.005}]
+    fake_match = {"id": "prio-1", "name": "Priority", "sector": "salud"}
+    # prio-1 has weak vector support (below _PRIORITY_MIN_VECTOR_SIM = 0.65)
+    vector_rows = [{"id": "prio-1", "score": 0.40}]
+
+    with patch("app.rag.catalog._priority_keyword_match", return_value=[fake_match]):
+        result = _priority_fallback(rows, "query", k=5, vector_rows=vector_rows)
+
+    assert result[0]["id"] == "other"
+    prio_row = next(r for r in result if r["id"] == "prio-1")
+    assert prio_row["score"] < result[0]["score"]
+
+
+def test_priority_fallback_absent_from_vector_rows_treated_as_no_support() -> None:
+    """A priority match missing entirely from vector_rows is treated as
+    having no vector support (same as a below-floor cosine score) — capped
+    below genuine competition instead of force-ranked to #1."""
+    from app.rag.catalog import _priority_fallback
+
+    rows = [{"id": "other", "name": "Other", "score": 0.005}]
+    fake_match = {"id": "prio-1", "name": "Priority", "sector": "salud"}
+    vector_rows = [{"id": "unrelated", "score": 0.90}]
+
+    with patch("app.rag.catalog._priority_keyword_match", return_value=[fake_match]):
+        result = _priority_fallback(rows, "query", k=5, vector_rows=vector_rows)
+
+    assert result[0]["id"] == "other"
+
+
+def test_priority_fallback_no_vector_rows_defaults_to_no_support() -> None:
+    """Calling without vector_rows at all (default None) never force-ranks."""
+    from app.rag.catalog import _priority_fallback
+
+    rows = [{"id": "other", "name": "Other", "score": 0.005}]
+    fake_match = {"id": "prio-1", "name": "Priority", "sector": "salud"}
+
+    with patch("app.rag.catalog._priority_keyword_match", return_value=[fake_match]):
+        result = _priority_fallback(rows, "query", k=5)
+
+    assert result[0]["id"] == "other"
+
+
+def test_priority_fallback_no_vector_support_and_no_genuine_competition_omits() -> None:
+    """No vector support AND no genuine competition (empty rows) at all: there
+    is nothing safe to cap against, so the priority match is not added."""
+    from app.rag.catalog import _priority_fallback
+
+    rows: list[dict] = []
+    fake_match = {"id": "prio-1", "name": "Priority", "sector": "salud"}
+    vector_rows = [{"id": "prio-1", "score": 0.40}]
+
+    with patch("app.rag.catalog._priority_keyword_match", return_value=[fake_match]):
+        result = _priority_fallback(rows, "query", k=5, vector_rows=vector_rows)
+
+    assert result == []
+
+
+def test_priority_fallback_vector_support_but_confident_genuine_caps_below() -> None:
+    """Vector support is present, but a confident genuine leader still blocks
+    force-ranking to #1 — the priority match is surfaced capped below it."""
+    from app.rag.catalog import _priority_fallback, _GENUINE_CONFIDENT_SCORE
+
+    rows = [{"id": "other", "name": "Other", "score": _GENUINE_CONFIDENT_SCORE + 0.01}]
+    fake_match = {"id": "prio-1", "name": "Priority", "sector": "salud"}
+    vector_rows = [{"id": "prio-1", "score": 0.90}]
+
+    with patch("app.rag.catalog._priority_keyword_match", return_value=[fake_match]):
+        result = _priority_fallback(rows, "query", k=5, vector_rows=vector_rows)
+
+    prio_row = next(r for r in result if r["id"] == "prio-1")
+    other_row = next(r for r in result if r["id"] == "other")
+    assert prio_row["score"] < other_row["score"]

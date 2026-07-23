@@ -61,9 +61,7 @@ def test_very_low_score_top_result_leaves_dataset_id_none() -> None:
     results = [
         {"id": "qrmy-eswf", "name": "Número de Empleados Empresas Registradas", "score": 0.015},
     ]
-    state = _base_state(
-        "Verificá este tweet: 'El gobierno contrató más en 2025 que en 2024'"
-    )
+    state = _base_state("Verificá este tweet: 'El gobierno contrató más en 2025 que en 2024'")
     with (
         patch(_SEARCH_TARGET, return_value=results),
         patch(_OVERRIDE_TARGET, return_value=None),
@@ -74,3 +72,35 @@ def test_very_low_score_top_result_leaves_dataset_id_none() -> None:
     # The candidate list must still be populated so answer_node can render
     # "maybe you mean X" suggestions from state["datasets"].
     assert result["datasets"] == results
+
+
+def test_answer_node_abstention_renders_markdown_links_for_suggestions() -> None:
+    """When no dataset was chosen, the honest-fallback message renders each
+    suggestion as a markdown link using its permalink (not just the bare
+    name), so the frontend can render clickable links."""
+    from app.agents.graph import answer_node
+
+    state = {
+        "question": "¿Qué hay de Antioquia en datos?",
+        "dataset_id": None,
+        "schema": None,
+        "datasets": [
+            {"id": "a", "name": "Dataset A", "permalink": "https://example.com/d/a"},
+            {"id": "b", "name": "Dataset B", "permalink": "https://example.com/d/b"},
+            {"id": "c", "name": "Dataset C"},  # no permalink
+        ],
+        "query_result": {
+            "rows": [],
+            "count": 0,
+            "error": "no_se_pudo_generar_la_consulta_o_no_hay_dataset",
+        },
+        "soql": "",
+        "is_join_question": False,
+    }
+
+    result = answer_node(state)
+
+    assert "[Dataset A](https://example.com/d/a)" in result["answer"]
+    assert "[Dataset B](https://example.com/d/b)" in result["answer"]
+    assert "Dataset C" in result["answer"]
+    assert "[Dataset C](" not in result["answer"]

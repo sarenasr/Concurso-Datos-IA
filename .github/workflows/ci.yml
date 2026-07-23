@@ -77,8 +77,7 @@ jobs:
             INSERT INTO catalog (id, name, type, domain_category)
             VALUES ('test-dataset', 'Test Dataset', 'dataset', 'test');
           "
-          ZERO_VEC=$(printf '[%.0s0,' {1..1023})
-          ZERO_VEC="${ZERO_VEC}0]"
+          ZERO_VEC="[$(printf '0,%.0s' {1..1023})0]"
           psql "$DATABASE_URL" -c "
             INSERT INTO catalog_embeddings (dataset_id, embedding)
             VALUES ('test-dataset', '${ZERO_VEC}'::vector);
@@ -88,8 +87,7 @@ jobs:
           test "$COUNT" -ge 1
       - name: Test match_catalog RPC
         run: |
-          ZERO_VEC=$(printf '[%.0s0,' {1..1023})
-          ZERO_VEC="${ZERO_VEC}0]"
+          ZERO_VEC="[$(printf '0,%.0s' {1..1023})0]"
           psql "$DATABASE_URL" -c "
             SELECT id FROM match_catalog(
               qvec := '${ZERO_VEC}'::vector,

@@ -196,17 +196,11 @@ def test_reranker_truncates_to_max_candidates() -> None:
 def test_reranker_respects_top_k() -> None:
     """Returns at most top_k results even if the API scores more."""
     candidates = [_candidate(f"d{i}", 1.0 - i * 0.1) for i in range(5)]
-    api_response = {
-        "results": [
-            {"index": i, "relevance_score": 1.0 - i * 0.1} for i in range(5)
-        ]
-    }
+    api_response = {"results": [{"index": i, "relevance_score": 1.0 - i * 0.1} for i in range(5)]}
 
     with (
         patch("app.rag.reranker.settings.openrouter_api_key", "test-key"),
-        patch(
-            "app.rag.reranker.httpx.post", return_value=_mock_response(api_response)
-        ),
+        patch("app.rag.reranker.httpx.post", return_value=_mock_response(api_response)),
     ):
         result = rerank_datasets("query", candidates, top_k=2)
 

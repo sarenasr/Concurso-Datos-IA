@@ -42,7 +42,9 @@ def _base_state(question: str, dataset_id: str | None, schema: dict | None) -> d
 
 def test_off_topic_dataset_is_rejected() -> None:
     """A dengue question routed to the COVID dataset clears dataset_id."""
-    state = _base_state("¿Cuántos casos de dengue se reportaron en 2023?", "gt2j-8ykr", _COVID_SCHEMA)
+    state = _base_state(
+        "¿Cuántos casos de dengue se reportaron en 2023?", "gt2j-8ykr", _COVID_SCHEMA
+    )
     resp = json.dumps({"relevant": False, "reason": "El dataset es de COVID-19, no de dengue."})
     with patch(_LLM_TARGET, return_value=resp) as mock_llm:
         result = relevance_gate_node(state)

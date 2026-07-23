@@ -43,6 +43,17 @@ _PRIORITY_FALLBACK_THRESHOLD = 0.02
 # priority match. Below the gate, priority is still capped just under the top
 # genuine score (see _priority_fallback) rather than an unconditional 0.05.
 _GENUINE_CONFIDENT_SCORE = 0.03
+# Vector-support floor for priority injection: a RAW pgvector cosine similarity
+# (in [0, 1], as returned by the match_catalog RPC) — NOT the small ~0-0.06
+# RRF-fused scale used elsewhere in this module. Calibrated from observed
+# cosine values: genuine on-topic priority matches cluster >= 0.71 (e.g.
+# CUM Medicamentos for a medicamentos query: 0.71; Familias en Acción for a
+# Familias en Acción query: 0.75; Vacunación COVID for "vacunación": 0.73),
+# while should-abstain keyword-only matches cluster <= 0.65 or are absent
+# from the vector leg entirely (e.g. SISBEN for a bare "Antioquia" mention:
+# 0.61). A keyword match with no vector support this strong is not allowed to
+# force-rank a priority dataset to #1 — see _priority_fallback.
+_PRIORITY_MIN_VECTOR_SIM = 0.65
 _MAX_KEYWORD_TOKENS = 5
 
 _STOPWORDS = frozenset(
@@ -327,7 +338,7 @@ def search_catalog(
     ]
     log.info("After priority boost top-5: %s", boosted_preview)
 
-    fused = _priority_fallback(fused, query, k)
+    fused = _priority_fallback(fused, query, k, vector_rows=vector_rows)
 
     final_preview = [
         (r.get("id"), r.get("name", "")[:50], f"{r.get('score', 0):.4f}") for r in fused[:k]
@@ -480,7 +491,9 @@ def _apply_priority_boost(rows: list[dict]) -> list[dict]:
     return rows
 
 
-def _priority_fallback(rows: list[dict], query: str, k: int) -> list[dict]:
+def _priority_fallback(
+    rows: list[dict], query: str, k: int, vector_rows: list[dict] | None = None
+) -> list[dict]:
     """Ensure the best keyword-matched priority dataset is in the results.
 
     SAFE OVERRIDE semantics: priority should only ever win the #1 spot when
@@ -488,22 +501,32 @@ def _priority_fallback(rows: list[dict], query: str, k: int) -> list[dict]:
     never be allowed to leapfrog a confident, independently-derived vector/
     keyword hit — that produced off-topic top suggestions in practice.
 
+    0. **Vector-support gate**: a keyword match alone is not enough to
+       force-rank/boost a priority dataset to #1. It must also have a genuine
+       vector-similarity hit (raw pgvector cosine, from ``vector_rows``, the
+       *pre-fusion* vector leg) >= ``_PRIORITY_MIN_VECTOR_SIM``. Without that
+       support (score too low, or the dataset absent from ``vector_rows``
+       entirely), the dataset is only ever surfaced capped below the genuine
+       leader — never force-ranked to #1. This is what stops a bare keyword
+       hit like "Antioquia" -> SISBEN from beating honest abstention.
     1. If the top result already *is* the best keyword-matched priority dataset
        with a score above ``_PRIORITY_FALLBACK_THRESHOLD``, do nothing.
     2. Otherwise compute the top GENUINE score — the best score among rows
        that are *not* the priority match itself (before any injection).
     3. Low-confidence gate: only if that top genuine score is below
        ``_GENUINE_CONFIDENT_SCORE`` (or there is no genuine competition at
-       all) do we boost/inject the priority match to #1, using
-       ``_PRIORITY_FALLBACK_SCORE`` (0.05) as before — safe, because by
-       construction the genuine competition is weak here.
-    4. Otherwise (a confident genuine match already leads) the priority
-       dataset is NOT force-ranked to #1. If it's missing from the results we
-       still surface it (so it's available to downstream logic/UI) but its
-       score is capped strictly below the genuine leader
+       all) AND the vector-support gate (0) passes do we boost/inject the
+       priority match to #1, using ``_PRIORITY_FALLBACK_SCORE`` (0.05) as
+       before.
+    4. Otherwise (a confident genuine match already leads, OR the
+       vector-support gate fails) the priority dataset is NOT force-ranked to
+       #1. If it's missing from the results we still surface it (so it's
+       available to downstream logic/UI) but its score is capped strictly
+       below the genuine leader
        (``min(_PRIORITY_FALLBACK_SCORE, top_genuine_score - epsilon)``) so it
-       can, at best, land just behind the confident genuine hit. If it's
-       already present, we leave it untouched.
+       can, at best, land just behind the confident genuine hit. When there is
+       no genuine competition at all AND no vector support, it is not added.
+       If it's already present, we leave it untouched.
 
     Entries touched by this function keep the ``"reason":
     "priority_keyword_match"`` tag (injected case) for auditability.
@@ -524,6 +547,9 @@ def _priority_fallback(rows: list[dict], query: str, k: int) -> list[dict]:
     ):
         return rows
 
+    vector_scores = {r.get("id"): float(r.get("score", 0.0)) for r in (vector_rows or [])}
+    has_vector_support = vector_scores.get(best_id, -1.0) >= _PRIORITY_MIN_VECTOR_SIM
+
     # Top GENUINE score: best score among rows that are NOT the priority match
     # itself. This is the bar the priority override must NOT be allowed to
     # clear when it's meaningfully high (see _GENUINE_CONFIDENT_SCORE).
@@ -535,19 +561,33 @@ def _priority_fallback(rows: list[dict], query: str, k: int) -> list[dict]:
 
     existing = next((r for r in rows if r.get("id") == best_id), None)
 
-    if confident_genuine:
-        # A confident genuine hit already leads — do NOT override it. Just
-        # make sure the priority dataset is still surfaced somewhere in the
-        # result set, capped below the genuine leader (never force-ranked
-        # over it).
+    if confident_genuine or not has_vector_support:
+        # A confident genuine hit already leads, OR the priority match lacks
+        # vector support — either way do NOT override it. Just make sure the
+        # priority dataset is still surfaced somewhere in the result set,
+        # capped below the genuine leader (never force-ranked over it).
         if existing is not None:
             log.info(
                 "Priority fallback: skipped override for %s (%s); genuine top "
-                "score %.4f >= confident threshold %.4f",
+                "score=%s confident=%s has_vector_support=%s",
                 best_id,
                 best_name,
-                top_genuine_score,
-                _GENUINE_CONFIDENT_SCORE,
+                f"{top_genuine_score:.4f}" if top_genuine_score is not None else "n/a",
+                confident_genuine,
+                has_vector_support,
+            )
+            return rows
+
+        if top_genuine_score is None:
+            # No genuine competition at all and no vector support: nothing to
+            # cap against and no safe basis to inject a keyword-only match.
+            log.info(
+                "Priority fallback: not adding %s (%s); no genuine competition "
+                "and no vector support (cosine=%s < %.4f)",
+                best_id,
+                best_name,
+                f"{vector_scores.get(best_id):.4f}" if best_id in vector_scores else "n/a",
+                _PRIORITY_MIN_VECTOR_SIM,
             )
             return rows
 
@@ -574,9 +614,10 @@ def _priority_fallback(rows: list[dict], query: str, k: int) -> list[dict]:
         rows.sort(key=lambda r: r["score"], reverse=True)
         return rows
 
-    # Low-confidence path: genuine retrieval is weak (or absent), so it's safe
-    # to boost/inject the priority dataset to the top — unchanged from the
-    # original behavior.
+    # Low-confidence path: genuine retrieval is weak (or absent) AND the
+    # priority match has vector support (has_vector_support is True here,
+    # since the branch above already returned otherwise) — safe to boost/
+    # inject the priority dataset to the top.
     if existing:
         old_score = float(existing.get("score", 0.0))
         existing["score"] = max(
